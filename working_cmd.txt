@@ -43,3 +43,36 @@ cd ~
 cd lio/Point-LIO/
 source devel/setup.bash
 roslaunch point_lio mapping_mid360.launch
+
+mkdir -p ~/bags
+cd ~/bags
+BAG_NAME="flight_3d_$(date +%Y%m%d_%H%M%S)"
+rosparam dump "${BAG_NAME}.yaml"
+
+cd  ~/bags
+rosbag record \
+  /fsm_ctrl/command \
+  /mavros/state \
+  /mavros/extended_state \
+  /mavros/local_position/pose \
+  /mavros/local_position/velocity_local \
+  /mavros/imu/data \
+  /mavros/rc/in \
+  /mavros/battery \
+  /mavros/esc_status \
+  /mavros/setpoint_attitude/cmd_vel \
+  /mavros/setpoint_attitude/thrust \
+  /visual_slam/odom \
+  /nmpc_state \
+  /debugPx4ctrl \
+  /single_offboard_fsm/trajectory_reference \
+  /single_offboard_fsm/trajectory_reference_velocity \
+  /goal \
+  /position_command \
+  /position_command_horizon \
+  /trajectory_generator_node/trajectory \
+  /complete_collision_trajectory \
+  /collision_trigger \
+  /real/external_force_est \
+  /traj_start_trigger \
+  /rosout
