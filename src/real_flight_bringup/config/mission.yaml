@@ -1,0 +1,11 @@
+# Mission endpoint configuration.
+# Start point is always current odometry position at trigger time.
+
+SetPos: [1.0, 2.0, 1.00]
+SetAtt: [0.0, 0.0, 1.0, 0.0]
+
+GoalPublish:
+  topic: "/goal"
+  frame_id: "world"
+  delay_sec: 3.0
+  repeat_count: 5

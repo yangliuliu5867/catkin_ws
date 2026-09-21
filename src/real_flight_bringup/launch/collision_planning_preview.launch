@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+  <arg name="engine_collision_bs72" default="/home/liet/mpd_splines/small/best_model_multimat.engine" />
+  <arg name="engine_collision_bs1" default="/home/liet/mpd_splines/small/best_model_multimat_bs1.engine" />
+  <arg name="engine_student" default="/home/liet/mpd_splines/small/student_distilled.engine" />
+  <arg name="use_cuda_graph" default="true" />
+  <arg name="verbose_timing" default="false" />
+  <arg name="pointseq_topic" default="/real/MyPointSeq" />
+  <arg name="ext_force_topic" default="/planning_preview/external_force_est" />
+  <arg name="use_time_based_collision_end_trigger" default="true" />
+  <arg name="output_png" default="/home/liet/catkin_ws/data_/collision_plan_preview.png" />
+  <arg name="reference_png" default="/home/liet/catkin_ws/data_/collision_reference.png" />
+  <arg name="stage1_csv" default="/home/liet/catkin_ws/data_/final_traj.csv" />
+  <arg name="stage2_csv" default="/home/liet/catkin_ws/data_/optimized_traj.csv" />
+  <arg name="reference_csv" default="/home/liet/catkin_ws/data_/collision_reference.csv" />Q
+
+  <!-- Pure planning mode: use a fixed fake odom as start state. -->
+  <rosparam param="/PlanningStart">[0.0, -1.25, 1.00]</rosparam>
+
+  <rosparam file="$(find real_flight_bringup)/config/vehicle.yaml" command="load" />
+  <rosparam file="$(find real_flight_bringup)/config/mission.yaml" command="load" />
+
+  <node pkg="real_flight_bringup" type="fake_poscmd_to_odom.py"
+        name="fake_poscmd_to_odom" output="screen">
+    <param name="cmd_topic" value="/position_command" />
+    <param name="odom_topic" value="/visual_slam/odom" />
+    <param name="collision_topic" value="/complete_collision_trajectory" />
+    <param name="goal_topic" value="/goal" />
+    <param name="pred_pose_topic" value="/trajectory_predicted_pose" />
+    <param name="pred_vel_topic" value="/trajectory_predicted_velocity" />
+    <param name="pred_acc_topic" value="/trajectory_predicted_acceleration" />
+    <param name="start_param" value="/PlanningStart" />
+    <param name="start_yaw" value="0.0" />
+    <param name="rate_hz" value="50.0" />
+    <param name="enable_collision_handoff" value="true" />
+    <param name="collision_transition_duration" value="0.15" />
+  </node>
+
+  <node pkg="intention_get_corridor" type="intention_get_corridor_node"
+        name="intention_get_corridor" output="screen">
+    <param name="RunInConsole" type="bool" value="0" />
+    <remap from="/MyPointSeq" to="$(arg pointseq_topic)" />
+    <remap from="/external_force_est" to="$(arg ext_force_topic)" />
+    <param name="engine_collision_bs72" value="$(arg engine_collision_bs72)" />
+    <param name="engine_collision_bs1" value="$(arg engine_collision_bs1)" />
+    <param name="engine_student" value="$(arg engine_student)" />
+    <param name="use_cuda_graph" value="$(arg use_cuda_graph)" />
+    <param name="verbose_timing" value="$(arg verbose_timing)" />
+    <param name="use_time_based_collision_end_trigger" value="$(arg use_time_based_collision_end_trigger)" />
+    <rosparam file="$(find real_flight_bringup)/config/intention_real.yaml" command="load" />
+    <rosparam file="$(find real_flight_bringup)/config/mission.yaml" command="load" />
+  </node>
+
+  <node pkg="traj_gen_in_corridor" type="traj_gen_in_corridor_node"
+        name="traj_gen_in_corridor" output="screen">
+    <remap from="/MyPointSeq" to="$(arg pointseq_topic)" />
+    <param name="engine_collision_bs72" value="$(arg engine_collision_bs72)" />
+    <param name="engine_collision_bs1" value="$(arg engine_collision_bs1)" />
+    <param name="engine_student" value="$(arg engine_student)" />
+    <param name="use_cuda_graph" value="$(arg use_cuda_graph)" />
+    <param name="verbose_timing" value="$(arg verbose_timing)" />
+    <rosparam file="$(find real_flight_bringup)/config/traj_gen_real.yaml" command="load" />
+  </node>
+
+  <node pkg="px4ctrl" type="polytraj_poscmd_bridge_node"
+        name="polytraj_poscmd_bridge" output="screen">
+    <rosparam file="$(find real_flight_bringup)/config/polytraj_poscmd_bridge.yaml" command="load" />
+    <param name="cmd_topic" value="/position_command" />
+  </node>
+
+  <node pkg="real_flight_bringup" type="publish_goal_on_odom.py"
+        name="publish_goal_on_odom" output="screen">
+    <param name="setpos_param" value="/SetPos" />
+    <param name="topic" value="/goal" />
+    <param name="frame_id" value="world" />
+    <param name="delay_sec" value="3.0" />
+    <param name="wait_for_map_topic" value="/globalmap" />
+    <param name="map_wait_timeout_sec" value="30.0" />
+    <param name="wait_for_subscriber_nodes" value="[intention_get_corridor, traj_gen_in_corridor]" />
+    <param name="subscriber_wait_timeout_sec" value="30.0" />
+    <param name="repeat_count" value="5" />
+    <param name="repeat_hz" value="10.0" />
+    <param name="odom_topic" value="/visual_slam/odom" />
+    <param name="odom_wait_timeout_sec" value="5.0" />
+  </node>
+
+  <node pkg="real_flight_bringup" type="publish_start_trigger.py"
+        name="publish_start_trigger" output="screen">
+    <param name="topic" value="/traj_start_trigger" />
+    <param name="odom_topic" value="/visual_slam/odom" />
+    <param name="delay_sec" value="4.0" />
+    <param name="wait_for_subscriber_nodes" value="[polytraj_poscmd_bridge]" />
+    <param name="subscriber_wait_timeout_sec" value="30.0" />
+    <param name="repeat_count" value="5" />
+    <param name="repeat_hz" value="10.0" />
+    <param name="odom_wait_timeout_sec" value="5.0" />
+  </node>
+
+  <node pkg="real_flight_bringup" type="publish_fake_collision_trigger.py"
+        name="publish_fake_collision_trigger" output="screen">
+    <param name="collision_topic" value="/complete_collision_trajectory" />
+    <param name="trigger_topic" value="/collision_trigger" />
+    <param name="goal_topic" value="/goal" />
+    <param name="transition_duration" value="0.15" />
+    <param name="hold_sec" value="0.2" />
+    <param name="extra_delay_sec" value="0.0" />
+  </node>
+
+  <node pkg="real_flight_bringup" type="plot_collision_plan.py"
+        name="plot_collision_plan" output="screen">
+    <param name="collision_topic" value="/complete_collision_trajectory" />
+    <param name="goal_topic" value="/goal" />
+    <param name="odom_topic" value="/visual_slam/odom" />
+    <param name="output_png" value="$(arg output_png)" />
+    <param name="stage1_csv" value="$(arg stage1_csv)" />
+    <param name="stage2_csv" value="$(arg stage2_csv)" />
+    <param name="save_period_sec" value="1.0" />
+    <param name="overwrite" value="true" />
+  </node>
+
+  <node pkg="real_flight_bringup" type="export_collision_reference.py"
+        name="export_collision_reference" output="screen">
+    <param name="collision_topic" value="/complete_collision_trajectory" />
+    <param name="output_csv" value="$(arg reference_csv)" />
+    <param name="stage1_csv" value="$(arg stage1_csv)" />
+    <param name="stage2_csv" value="$(arg stage2_csv)" />
+    <param name="collision_transition_duration" value="0.15" />
+    <param name="sample_dt" value="0.01" />
+    <param name="auto_shutdown_after_save" value="false" />
+  </node>
+
+  <node pkg="real_flight_bringup" type="plot_collision_reference.py"
+        name="plot_collision_reference" output="screen">
+    <param name="input_csv" value="$(arg reference_csv)" />
+    <param name="output_png" value="$(arg reference_png)" />
+    <param name="save_period_sec" value="1.0" />
+  </node>
+</launch>

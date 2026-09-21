@@ -1,0 +1,6 @@
+<launch>
+
+    <node pkg="px4ctrl" type="test_attitude_target_node" name="test_attitude_target" output="screen">
+    </node>
+
+</launch>

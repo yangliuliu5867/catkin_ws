@@ -1,0 +1,15 @@
+# Shared vehicle parameters for real-flight pipeline.
+# Keep this file as the single source of truth and mirror values into
+# node-specific config files when required by their implementation.
+
+VehicleMass: 1.17
+GravAcc: 9.81
+VehicleInertia: [0.01, 0.01, 0.013]
+
+VehicleModel:
+  mass: 1.17
+  gravity: 9.81
+  inertia: [0.01, 0.01, 0.013]
+  arm_length: 0.26
+  kf: 8.98132e-9
+  km: 2.1e-10

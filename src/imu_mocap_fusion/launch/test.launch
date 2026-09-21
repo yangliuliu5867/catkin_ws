@@ -1,0 +1,29 @@
+<launch>
+    <arg name="mav_name" default="tx_uav" />
+
+    <node pkg="imu_mocap_fusion" type="mocap_fix_node" name="mocap_fix" />
+
+    <node pkg="imu_mocap_fusion" type="imu_mocap_fusion_node" name="imu_mocap_fusion" output="screen">
+        <param name="cfgPath" value="$(find imu_mocap_fusion)/config/imu_mocap_fusion.yaml" />
+
+        <!-- subscribe -->
+        <remap from="~mocap" to="/vrpn_client_node/$(arg mav_name)/pose" />
+        <remap from="~imu" to="/mavros/imu/data" />
+
+        <!-- publish -->
+        <remap from="~odom" to="/$(arg mav_name)/imu_mocap_fusion/odom_test" />
+    </node>
+
+    <node pkg="rosbag" type="play" name="player1" output="screen"
+        args="$(find imu_mocap_fusion)/data/2024-04-21-16-22-24.bag">
+    </node>
+
+    <node pkg="rviz" type="rviz" name="rviz1" output="screen"
+        args="-d $(find imu_mocap_fusion)/config/test.rviz">
+    </node>
+
+    <!-- <node pkg="plotjuggler" type="plotjuggler" name="plotjuggler" output="screen"
+        args="-l $(find imu_mocap_fusion)/data/test.xml">
+    </node> -->
+
+</launch>

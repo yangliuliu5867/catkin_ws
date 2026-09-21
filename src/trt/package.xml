@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>trt</name>
+  <version>0.0.1</version>
+  <description>The trt package: wrappers and manager for TensorRT models (CollisionPredictor/StudentPredictor).</description>
+
+  <maintainer email="someone@somewhere.com">Your Name</maintainer>
+  <license>BSD</license>
+
+  <!-- build tool -->
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- catkin/ROS dependencies -->
+  <build_depend>roscpp</build_depend>
+  <build_depend>std_msgs</build_depend>
+
+  <exec_depend>roscpp</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <!-- Optionally, if you expose services/messages add message_generation/message_runtime -->
+  <!-- <build_depend>message_generation</build_depend> -->
+  <!-- <exec_depend>message_runtime</exec_depend> -->
+
+  <!-- Notes for system-level dependencies: CUDA / TensorRT must be installed on the system.
+       These are not catkin packages and therefore listed here only as informational hints.
+       Ensure appropriate system packages/libraries (libcudart, libnvinfer) are present and
+       available to the linker when building this package. -->
+  <export>
+    <build_type>catkin</build_type>
+  </export>
+</package>

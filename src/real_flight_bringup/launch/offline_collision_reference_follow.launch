@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+  <arg name="mav_name" default="tx_uav" />
+  <arg name="enable_px4ctrl" default="true" />
+
+  <arg name="reference_csv" default="/home/liet/catkin_ws/data_/collision_reference.csv" />
+  <arg name="cmd_topic" default="/position_command" />
+  <arg name="frame_id" default="world" />
+
+  <arg name="enable_pre_align" default="true" />
+  <arg name="pre_align_altitude" default="1.00" />
+  <arg name="offboard_wait_timeout_sec" default="0.0" />
+  <arg name="pre_align_timeout_sec" default="20.0" />
+
+  <rosparam file="$(find real_flight_bringup)/config/vehicle.yaml" command="load" />
+
+  <node pkg="imu_mocap_fusion" type="imu_mocap_fusion_node" name="imu_mocap_fusion" output="screen">
+    <param name="cfgPath" value="$(find real_flight_bringup)/config/imu_mocap_fusion_real.yaml" />
+    <remap from="~mocap" to="/vrpn_client_node/$(arg mav_name)/pose" />
+    <remap from="~imu" to="/mavros/imu/data" />
+    <remap from="~odom" to="/visual_slam/odom" />
+    <remap from="~imf" to="/imu_mocap_fusion/imf_out" />
+  </node>
+
+  <node pkg="real_flight_bringup" type="publish_reference_start_once.py"
+        name="publish_reference_start_once" output="screen">
+    <param name="state_topic" value="/mavros/state" />
+    <param name="odom_topic" value="/visual_slam/odom" />
+    <param name="pre_align_cmd_topic" value="$(arg cmd_topic)" />
+    <param name="topic" value="/traj_start_trigger" />
+    <param name="frame_id" value="$(arg frame_id)" />
+    <param name="delay_sec" value="0.0" />
+    <param name="repeat_count" value="10" />
+    <param name="repeat_hz" value="20.0" />
+    <param name="wait_offboard" value="true" />
+    <param name="offboard_wait_timeout_sec" value="$(arg offboard_wait_timeout_sec)" />
+    <param name="enable_pre_align" value="$(arg enable_pre_align)" />
+    <param name="pre_align_altitude" value="$(arg pre_align_altitude)" />
+    <param name="pre_align_rate_hz" value="30.0" />
+    <param name="pre_align_hold_sec" value="0.8" />
+    <param name="pre_align_timeout_sec" value="$(arg pre_align_timeout_sec)" />
+    <param name="pre_align_z_tolerance" value="0.15" />
+    <param name="pre_align_att_tolerance" value="0.20" />
+    <param name="pre_align_blind_publish_sec" value="1.0e9" />
+    <param name="odom_wait_timeout_sec" value="20.0" />
+    <param name="pre_align_max_vel" value="0.6" />
+    <param name="pre_align_max_acc" value="1.2" />
+    <param name="pre_align_min_duration" value="2.0" />
+  </node>
+
+  <node pkg="real_flight_bringup" type="replay_position_command.py"
+        name="replay_position_command" output="screen">
+    <param name="reference_csv" value="$(arg reference_csv)" />
+    <param name="cmd_topic" value="$(arg cmd_topic)" />
+    <param name="odom_topic" value="/visual_slam/odom" />
+    <param name="state_topic" value="/mavros/state" />
+    <param name="frame_id" value="$(arg frame_id)" />
+    <param name="rate_hz" value="50.0" />
+    <param name="wait_start_trigger" value="true" />
+    <param name="start_trigger_topic" value="/traj_start_trigger" />
+    <param name="start_trigger_timeout_sec" value="0.0" />
+    <param name="wait_offboard" value="false" />
+    <param name="start_delay_sec" value="0.0" />
+    <param name="hold_final_point" value="true" />
+    <param name="start_warn_threshold" value="0.5" />
+  </node>
+
+  <node if="$(arg enable_px4ctrl)" pkg="px4ctrl" type="px4ctrl_node" name="px4ctrl" output="screen">
+    <rosparam command="load" file="$(find px4ctrl)/config/tx_uav.yaml" />
+    <rosparam command="load" file="$(find real_flight_bringup)/config/px4ctrl_poscmd_override.yaml" />
+    <remap from="~odom" to="/visual_slam/odom" />
+    <remap from="~cmd" to="$(arg cmd_topic)" />
+  </node>
+</launch>

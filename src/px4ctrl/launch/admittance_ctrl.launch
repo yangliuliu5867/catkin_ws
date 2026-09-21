@@ -1,0 +1,12 @@
+<launch>
+    <arg name="mav_name" default="tx_uav" />
+
+    <node pkg="px4ctrl" type="admittance_control_node" name="admittance_control" output="screen">
+        <rosparam command="load" file="$(find px4ctrl)/config/admittance_ctrl.yaml" />
+
+        <remap from="~odom" to="/$(arg mav_name)/imu_mocap_fusion/odom" />
+        <remap from="~ewe" to="/$(arg mav_name)/external_wrench_estimation/ewe_out" />
+        <remap from="~cmd" to="/$(arg mav_name)/position_cmd" />
+    </node>
+
+</launch>

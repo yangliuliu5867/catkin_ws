@@ -1,0 +1,11 @@
+<launch>
+    <arg name="mav_name" default="tx_uav" />
+
+    <node pkg="px4ctrl" type="debug_node" name="debug" output="screen">
+        <remap from="~imu_data" to="/mavros/imu/data" />
+		<remap from="~odom" to="/$(arg mav_name)/imu_mocap_fusion/odom" />
+        <remap from="~esc_status" to="/mavros/esc_status" />
+        <remap from="~debugPx4ctrl" to="/debugPx4ctrl" />
+    </node>
+
+</launch>

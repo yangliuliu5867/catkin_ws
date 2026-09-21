@@ -1,0 +1,22 @@
+AdmittanceControl:
+    M_vx: 2.5
+    M_vy: 2.5
+    M_vz: 2.5
+    D_vx: 1.0
+    D_vy: 1.0
+    D_vz: 1.0
+    K_vx: 0.0
+    K_vy: 0.0
+    K_vz: 0.0
+
+LinearMotionSpeed:
+    Vx: -2.5
+    Vy: 0.0
+    Vz: 0.0
+
+Threshold:
+    dt_fix_min: 0.2
+    F_collision_min: 2.0
+    dt_stop_min: 0.2
+    fix_vel_decay: 0.95
+    stop_vel_max: 0.2

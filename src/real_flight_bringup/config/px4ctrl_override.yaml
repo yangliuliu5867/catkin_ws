@@ -1,0 +1,6 @@
+# Overrides applied after loading px4ctrl/config/tx_uav.yaml
+# to keep vehicle dynamics consistent with planning/estimation.
+
+mass: 1.17
+gra: 9.81
+use_bridge_forwarding: true

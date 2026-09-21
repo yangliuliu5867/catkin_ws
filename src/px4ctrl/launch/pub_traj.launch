@@ -1,0 +1,9 @@
+<launch>
+    <arg name="mav_name" default="tx_uav" />
+
+	<node pkg="px4ctrl" type="px4traj_node" name="px4traj" output="screen">
+		<remap from="~cmd" to="/$(arg mav_name)/position_cmd" />
+		<rosparam command="load" file="$(find px4ctrl)/config/traj.yaml" />
+	</node>
+
+</launch>

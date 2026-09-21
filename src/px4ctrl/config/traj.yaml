@@ -1,0 +1,15 @@
+type: 0  # 0: Circle
+
+circle:
+    x_limit: 0.5
+    y_limit: 0.5
+    z_limit: 0.3
+    yaw_limit: 0.0
+    x_period: 5.0
+    y_period: 5.0
+    z_period: 5.0
+    yaw_period: 10
+    x_phase0: 0 # rad
+    y_phase0: 1.57 # rad
+    z_phase0: 0 # rad
+    yaw_phase0: 0 # rad

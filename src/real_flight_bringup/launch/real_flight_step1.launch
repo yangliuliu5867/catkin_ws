@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <arg name="mav_name" default="tx_uav" />
+    <arg name="enable_goal_publish" default="true" />
+    <arg name="enable_px4ctrl" default="true" />
+    <arg name="engine_collision_bs72" default="/home/liet/mpd_splines/small/best_model_multimat.engine" />
+    <arg name="engine_collision_bs1" default="/home/liet/mpd_splines/small/best_model_multimat_bs1.engine" />
+    <arg name="engine_student" default="/home/liet/mpd_splines/small/student_distilled.engine" />
+    <arg name="use_cuda_graph" default="true" />
+    <arg name="verbose_timing" default="false" />
+    <arg name="pointseq_topic" default="/real/MyPointSeq" />
+    <arg name="ext_force_topic" default="/real/external_force_est" />
+    <arg name="use_time_based_collision_end_trigger" default="false" />
+    <arg name="enable_pre_align" default="true" />
+    <arg name="pre_align_altitude" default="1.00" />
+    <arg name="offboard_wait_timeout_sec" default="0.0" />
+    <arg name="pre_align_timeout_sec" default="20.0" />
+    <arg name="pre_align_cmd_topic" default="/position_command" />
+
+    <!-- Global shared params -->
+    <rosparam file="$(find real_flight_bringup)/config/vehicle.yaml" command="load" />
+    <rosparam file="$(find real_flight_bringup)/config/mission.yaml" command="load" />
+
+    <!-- 1) IMU + mocap fusion: publish odom and IMU-derived fused states -->
+    <node pkg="imu_mocap_fusion" type="imu_mocap_fusion_node" name="imu_mocap_fusion" output="screen">
+        <param name="cfgPath" value="$(find real_flight_bringup)/config/imu_mocap_fusion_real.yaml" />
+        <remap from="~mocap" to="/vrpn_client_node/$(arg mav_name)/pose" />
+        <remap from="~imu" to="/mavros/imu/data" />
+        <remap from="~odom" to="/visual_slam/odom" />
+        <remap from="~imf" to="/imu_mocap_fusion/imf_out" />
+    </node>
+
+    <!-- 2) External wrench estimation from fused state + ESC -->
+    <node pkg="external_wrench_estimation" type="external_wrench_estimation_node"
+          name="external_wrench_estimation" output="screen">
+        <param name="cfgPath" value="$(find real_flight_bringup)/config/external_wrench_estimation_real.yaml" />
+        <remap from="~imf" to="/imu_mocap_fusion/imf_out" />
+        <remap from="~rmu" to="/mavros/esc_status" />
+        <remap from="~ewe" to="/external_wrench_estimation/ewe_out" />
+        <remap from="~eweBias" to="/external_wrench_estimation/ewe_bias_out" />
+    </node>
+
+    <!-- Convert WrenchStamped to Vector3Stamped for existing planner/traj_server -->
+    <node pkg="real_flight_bringup" type="wrench_to_force_vector.py"
+          name="wrench_to_force_vector" output="screen">
+        <param name="input_wrench_topic" value="/external_wrench_estimation/ewe_out" />
+                <param name="output_force_topic" value="$(arg ext_force_topic)" />
+        <param name="output_frame_id" value="world" />
+    </node>
+
+    <!-- Front-end planner: static PCD + dynamic start from current odom -->
+    <node pkg="intention_get_corridor" type="intention_get_corridor_node"
+          name="intention_get_corridor" output="screen">
+        <param name="RunInConsole" type="bool" value="0" />
+                                <remap from="/MyPointSeq" to="$(arg pointseq_topic)" />
+                                <remap from="/external_force_est" to="$(arg ext_force_topic)" />
+                <param name="engine_collision_bs72" value="$(arg engine_collision_bs72)" />
+                <param name="engine_collision_bs1" value="$(arg engine_collision_bs1)" />
+                <param name="engine_student" value="$(arg engine_student)" />
+                <param name="use_cuda_graph" value="$(arg use_cuda_graph)" />
+                <param name="verbose_timing" value="$(arg verbose_timing)" />
+        <param name="use_time_based_collision_end_trigger" value="$(arg use_time_based_collision_end_trigger)" />
+        <rosparam file="$(find real_flight_bringup)/config/intention_real.yaml" command="load" />
+        <rosparam file="$(find real_flight_bringup)/config/mission.yaml" command="load" />
+    </node>
+
+    <!-- Trajectory generation -->
+    <node pkg="traj_gen_in_corridor" type="traj_gen_in_corridor_node"
+          name="traj_gen_in_corridor" output="screen">
+                <remap from="/MyPointSeq" to="$(arg pointseq_topic)" />
+                <param name="engine_collision_bs72" value="$(arg engine_collision_bs72)" />
+                <param name="engine_collision_bs1" value="$(arg engine_collision_bs1)" />
+                <param name="engine_student" value="$(arg engine_student)" />
+                <param name="use_cuda_graph" value="$(arg use_cuda_graph)" />
+                <param name="verbose_timing" value="$(arg verbose_timing)" />
+        <rosparam file="$(find real_flight_bringup)/config/traj_gen_real.yaml" command="load" />
+    </node>
+
+    <!-- Polynomial trajectory sampler -> PositionCommand -->
+    <node pkg="px4ctrl" type="polytraj_poscmd_bridge_node" name="polytraj_poscmd_bridge" output="screen">
+        <rosparam file="$(find real_flight_bringup)/config/polytraj_poscmd_bridge.yaml" command="load" />
+        <param name="cmd_topic" value="/position_command" />
+        <param name="ext_force_topic" value="$(arg ext_force_topic)" />
+        <param name="use_external_force_collision_hold" value="true" />
+        <param name="external_force_collision_threshold" value="4.0" />
+    </node>
+
+    <!-- Goal trigger (endpoint is read from /SetPos in mission.yaml) -->
+    <node if="$(arg enable_goal_publish)" pkg="real_flight_bringup" type="publish_goal_once.py"
+          name="publish_goal_once" output="screen">
+        <param name="setpos_param" value="/SetPos" />
+        <param name="topic" value="/goal" />
+        <param name="frame_id" value="world" />
+        <param name="delay_sec" value="3.0" />
+        <param name="repeat_count" value="5" />
+        <param name="repeat_hz" value="10.0" />
+        <param name="enable_pre_align" value="$(arg enable_pre_align)" />
+        <param name="wait_offboard" value="true" />
+        <param name="offboard_wait_timeout_sec" value="$(arg offboard_wait_timeout_sec)" />
+        <param name="state_topic" value="/mavros/state" />
+        <param name="odom_topic" value="/visual_slam/odom" />
+        <param name="pre_align_cmd_topic" value="$(arg pre_align_cmd_topic)" />
+        <param name="pre_align_altitude" value="$(arg pre_align_altitude)" />
+        <param name="pre_align_rate_hz" value="30.0" />
+        <param name="pre_align_hold_sec" value="0.8" />
+        <param name="pre_align_timeout_sec" value="$(arg pre_align_timeout_sec)" />
+        <param name="pre_align_z_tolerance" value="0.15" />
+        <param name="pre_align_att_tolerance" value="0.20" />
+        <param name="pre_align_blind_publish_sec" value="1.0e9" />
+        <param name="odom_wait_timeout_sec" value="$(arg pre_align_timeout_sec)" />
+    </node>
+
+    <!-- Optional: real low-level control -->
+    <node if="$(arg enable_px4ctrl)" pkg="px4ctrl" type="px4ctrl_node" name="px4ctrl" output="screen">
+        <rosparam command="load" file="$(find px4ctrl)/config/tx_uav.yaml" />
+        <rosparam command="load" file="$(find real_flight_bringup)/config/px4ctrl_poscmd_override.yaml" />
+        <remap from="~odom" to="/visual_slam/odom" />
+        <remap from="~cmd" to="/position_command" />
+    </node>
+</launch>
+

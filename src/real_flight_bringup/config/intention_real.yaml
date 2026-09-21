@@ -1,0 +1,38 @@
+# Front-end planner config for real flight with static PCD map.
+
+InfMapTopic: "/globalmap"
+OdomTopic: "/visual_slam/odom"
+TargetTopic: "/goal"
+
+PointCloudUsePCD: true
+# NOTE: intention_get_corridor loads as (its_package_path + PointCloudPath).
+# The path below intentionally jumps to this bringup package.
+PointCloudPath: "/../real_flight_bringup/config/maps/static_map.pcd"
+CorridorPath: "/../real_flight_bringup/config/test_corridor.txt"
+
+OutlierThreshold: 1
+DilateRadius: 0.26
+GridResolution: 0.10
+R3Bound: [-1.5, 5.0, -2.6, 3.5, 0.0, 2.0]
+LocalBoxHalfWidth: 3.0
+ExpectedHeight: [0.5, 2.0]
+Astar_weight: 2.0
+VisualizeAstarPath: false
+
+MaxVelocity: 5.0
+MaxAcceleration: 10.0
+GoalTolerance: 0.5
+
+CollisionModel:
+  friction: 0.65
+  damping_ratio: 0.10
+  max_collision_velocity: 2.0
+  collision_force_threshold: 4.0
+  collision_cooldown_sec: 1.0
+
+SampleForward:
+  weights:
+    w_collision: 10000.0
+    w_kin: 10000.0
+    w_dir: 100.0
+    w_end: 10.0

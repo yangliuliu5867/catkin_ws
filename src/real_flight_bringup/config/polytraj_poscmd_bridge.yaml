@@ -1,0 +1,32 @@
+traj_topic: /trajectory_generator_node/trajectory
+collision_traj_topic: /complete_collision_trajectory
+odom_topic: /visual_slam/odom
+start_trigger_topic: /traj_start_trigger
+ext_force_topic: /external_force_est
+
+cmd_topic: /position_command
+
+pred_pose_topic: /trajectory_predicted_pose
+pred_vel_topic: /trajectory_predicted_velocity
+pred_acc_topic: /trajectory_predicted_acceleration
+remaining_time_topic: /trajectory_remaining_time
+current_segment_topic: /trajectory_current_segment
+collision_trigger_topic: /collision_trigger
+
+publish_rate: 50.0
+traj_start_delay: 0.0
+
+# Time-based planned collision handling used by preview / legacy mode.
+# When `use_external_force_collision_hold` is false, the bridge uses the
+# collision event's planned time window and blends pre/post collision velocity.
+collision_transition_duration: 0.15
+planned_collision_hold_sec: 0.15
+
+# Real-flight external-force collision hold:
+# - |F_ext| > threshold: hold current position, zero linear velocity, keep height,
+#   and set desired yaw to current odom yaw each cycle.
+# - |F_ext| < threshold: keep holding until a new post-collision trajectory arrives.
+use_external_force_collision_hold: false
+external_force_collision_threshold: 4.0
+
+hold_final_position: true

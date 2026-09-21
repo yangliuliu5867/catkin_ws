@@ -1,0 +1,6 @@
+# Overrides applied after loading px4ctrl/config/tx_uav.yaml
+# for the real-flight PositionCommand tracking pipeline.
+
+mass: 1.75
+gra: 9.81
+use_bridge_forwarding: false

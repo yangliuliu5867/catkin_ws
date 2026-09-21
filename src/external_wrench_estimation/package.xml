@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>external_wrench_estimation</name>
+  <version>1.0.0</version>
+  <description>The external_wrench_estimation package</description>
+  <maintainer email="yyhan@todo.todo">YYHAN YIN</maintainer>
+  <license>Apache License Version 2.0</license>
+  <!-- <url type="website">http://wiki.ros.org/external_wrench_estimation</url> -->
+  <author email="yyhan@example.com">YYHAN YIN</author>
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>roscpp</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>imu_mocap_fusion</build_depend>
+  <!-- <run_depend>roscpp</run_depend>
+  <run_depend>geometry_msgs</run_depend>
+  <run_depend>imu_mocap_fusion</run_depend>
+  <run_depend>sensor_msgs</run_depend>
+  <run_depend>mavros</run_depend> -->
+  <!-- The export tag contains other, unspecified, tags -->
+  <export>
+    <!-- Other tools can request additional information be placed here -->
+  </export>
+</package>

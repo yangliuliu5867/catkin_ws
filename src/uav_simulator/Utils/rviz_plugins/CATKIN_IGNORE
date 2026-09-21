@@ -1,0 +1,3 @@
+# This package provides RViz plugins.
+# It is intentionally ignored because RViz/Qt4 is not required for this workspace build.
+# Remove this file to re-enable building rviz_plugins.

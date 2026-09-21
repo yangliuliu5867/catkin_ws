@@ -1,0 +1,12 @@
+<launch>
+    <arg name="mav_name" default="tx_uav" />
+
+	<node pkg="px4ctrl" type="px4ctrl_node" name="px4ctrl" output="screen">
+		<!-- subscribe -->
+		<remap from="~odom" to="/$(arg mav_name)/imu_mocap_fusion/odom" />
+		<remap from="~cmd" to="/$(arg mav_name)/position_cmd" />
+
+		<rosparam command="load" file="$(find px4ctrl)/config/tx_uav.yaml" />
+	</node>
+
+</launch>

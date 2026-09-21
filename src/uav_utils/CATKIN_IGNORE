@@ -1,0 +1,2 @@
+Temporarily ignored to avoid duplicate package name with src/uav_simulator/Utils/uav_utils.
+Real-flight bringup currently depends on the Utils variant.

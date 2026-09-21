@@ -1,0 +1,7 @@
+geometry_msgs/Point collision_point
+geometry_msgs/Vector3 pre_collision_velocity
+geometry_msgs/Vector3 post_collision_velocity
+geometry_msgs/Vector3 plane_normal
+float64 plane_d
+float64 collision_time
+float64 given_yaw

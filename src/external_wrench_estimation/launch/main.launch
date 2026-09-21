@@ -1,0 +1,18 @@
+<launch>
+    <arg name="mav_name" default="tx_uav" />
+
+    <node pkg="external_wrench_estimation" type="external_wrench_estimation_node"
+        name="external_wrench_estimation"
+        output="screen">
+        <param name="cfgPath"
+            value="$(find external_wrench_estimation)/config/external_wrench_estimation.yaml" />
+
+        <!-- subscribe -->
+        <remap from="~imf" to="/$(arg mav_name)/imu_mocap_fusion/imf_out" />
+        <remap from="~rmu" to="/mavros/esc_status" />
+
+        <!-- publish -->
+        <remap from="~ewe" to="/$(arg mav_name)/external_wrench_estimation/ewe_out" />
+        <remap from="~eweBias" to="/$(arg mav_name)/external_wrench_estimation/ewe_bias_out" />
+    </node>
+</launch>
