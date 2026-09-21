@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+
+<launch>
+     <arg name="vision_source" default="1"/>
+     <arg name="mocap_topic" default="/vrpn_client_node/catch/pose"/>
+     <arg name="lidar_topic" default="/aft_mapped_to_init"/>
+     
+     <include file="$(find fsm_ctrl)/launch/px4_estimator.launch">
+       <arg name="vision_source" value="$(arg vision_source)"/>
+       <arg name="mocap_topic" value="$(arg mocap_topic)"/>
+       <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+     
+     </include>
+     
+     <node pkg="fsm_ctrl" type="swarm_user_cmd" name="swarm_user_cmd" output="screen"> 
+     
+     </node>
+
+</launch>

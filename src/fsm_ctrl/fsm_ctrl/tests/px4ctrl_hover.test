@@ -1,0 +1,6 @@
+<launch>
+  <rosparam command="load" file="$(find px4ctrl)/config/tx_uav.yaml"
+            ns="px4ctrl_hover_test/controller"/>
+  <test test-name="px4ctrl_hover_test" name="px4ctrl_hover_test"
+        pkg="fsm_ctrl" type="px4ctrl_hover_test" time-limit="45"/>
+</launch>

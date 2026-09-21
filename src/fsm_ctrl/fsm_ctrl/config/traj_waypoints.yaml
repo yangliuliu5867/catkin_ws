@@ -1,0 +1,11 @@
+# Trajectory waypoints for cmd==8 (2-gates trajectory)
+# Each point is [x, y, z] in the world frame.
+# Modify these values and re-launch — no recompilation needed.
+
+traj_wp:
+  start: [0.0, 0.0, 0.5]
+  mid:   [0.5, 0.5, 0.5]
+  end:   [1.0, 0.0, 0.5]
+
+  # Hover time (seconds) before starting the trajectory
+  hover_time: 2.0

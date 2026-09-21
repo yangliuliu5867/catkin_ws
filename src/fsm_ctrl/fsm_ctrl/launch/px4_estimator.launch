@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+
+<launch>
+    <arg name="vision_source" default="1"/>
+    <arg name="mocap_topic" default="/vrpn_client_node/catch/pose"/>
+    <arg name="lidar_topic" default="/aft_mapped_to_init"/>
+
+	<node pkg="fsm_ctrl" type="px4_estimator" name="px4_estimator" output="screen">
+
+		<!-- 0: mocap  1: lidar  2: camera -->
+		<param name="vision_source" value="$(arg vision_source)" type="int"/>
+		
+		<remap from="~lidar_odom" to="$(arg lidar_topic)"/>
+		<remap from="~mocap_pose" to="$(arg mocap_topic)"/>
+	
+	</node>
+
+</launch>
