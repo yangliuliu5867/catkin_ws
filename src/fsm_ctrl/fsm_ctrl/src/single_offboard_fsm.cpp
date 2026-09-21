@@ -185,6 +185,9 @@ int main(int argc, char **argv)
                        &Px4CtrlHover::imuCallback, &hover_controller);
     const ros::Publisher debug_publisher =
         node.advertise<quadrotor_msgs::Px4ctrlDebug>("/debugPx4ctrl", 10);
+    // PoseStamped exposes x/y/z as ordinary time series in PlotJuggler.
+    const ros::Publisher desired_trajectory_publisher =
+        node.advertise<geometry_msgs::PoseStamped>("/fsm_ctrl/desired_trajectory", 50);
     const ros::Subscriber rc_subscriber =
         node.subscribe<mavros_msgs::RCIn>(
             "/mavros/rc/in", 10, RcCallback);
@@ -278,6 +281,11 @@ int main(int argc, char **argv)
             hover_target.position.z = hover_z;
             hover_target.orientation.z = std::sin(hover_yaw * 0.5);
             hover_target.orientation.w = std::cos(hover_yaw * 0.5);
+            geometry_msgs::PoseStamped desired_trajectory_point;
+            desired_trajectory_point.header.stamp = now;
+            desired_trajectory_point.header.frame_id = "map";
+            desired_trajectory_point.pose = hover_target;
+            desired_trajectory_publisher.publish(desired_trajectory_point);
             if (!current_state.armed)
             {
                 attitude_publisher.publish(hover_controller.idle(now));
@@ -351,6 +359,12 @@ int main(int argc, char **argv)
             geometry_msgs::Vector3 target_acceleration;
             target_acceleration.x = -0.75 * std::sin(phase);
             target_acceleration.y = -0.75 * std::cos(phase);
+
+            geometry_msgs::PoseStamped desired_trajectory_point;
+            desired_trajectory_point.header.stamp = now;
+            desired_trajectory_point.header.frame_id = "map";
+            desired_trajectory_point.pose = target;
+            desired_trajectory_publisher.publish(desired_trajectory_point);
 
             if (!current_state.armed)
             {

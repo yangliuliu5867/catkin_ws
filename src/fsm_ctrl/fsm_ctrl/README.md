@@ -100,6 +100,14 @@ roslaunch fsm_ctrl single.launch hover_x:=0.0 hover_y:=0.0 hover_z:=1.0 hover_ya
 不会在本入口隐式生效。参数必须与实际飞机一致。
 调 Kp/Kv/悬停油门仍改原配置，或者通过 `px4ctrl_config:=/绝对路径/你的配置.yaml` 指定配置。
 原 single.launch 保留的 kp_x、kv_x、NMPC 等参数不参与 cmd=3 或 cmd=5 的计算。
+
+## 跟踪曲线
+
+cmd=3 和 cmd=5 运行时，会以 50 Hz 发布以下 `geometry_msgs/PoseStamped` 话题：
+
+- `/fsm_ctrl/desired_trajectory`：控制器的期望位置
+
+实际位置直接使用 MAVROS 原话题 `/mavros/local_position/pose`。在 PlotJuggler 对比两个话题的 `pose.position.x/y/z`。
 支持原 ctrl_mode 0/1 的姿态控制；不启用 bodyrate/bridge/MPC 分支。
 
 ## 原命令含义提醒
