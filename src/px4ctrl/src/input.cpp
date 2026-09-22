@@ -178,9 +178,8 @@ void Imu_Data_t::feed(sensor_msgs::ImuConstPtr pMsg) {
     static int one_min_count = 9999;
     static ros::Time last_clear_count_time = ros::Time(0.0);
     if ((now - last_clear_count_time).toSec() > 1.0) {
-        if (one_min_count < 100) {
-            ROS_WARN("IMU frequency seems lower than 100Hz, which is too low!");
-        }
+        // The vehicle's MAVLink IMU stream can legitimately run below 100 Hz.
+        // Keep the counter timing unchanged, but do not emit a warning every second.
         one_min_count = 0;
         last_clear_count_time = now;
     }
