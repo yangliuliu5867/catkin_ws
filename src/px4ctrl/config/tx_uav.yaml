@@ -1,11 +1,11 @@
-mass: 1.17 # kg
+mass: 1.805 # kg
 gra: 9.801
 pose_solver: 1 # 0:From ZhepeiWang (drag & less singular) 1:From ZhepeiWang, 2:From rotor-drag
 ctrl_freq_max: 100.0
 use_bodyrate_ctrl: false
 max_manual_vel: 1.0
 max_angle: 30 # Attitude angle limit in degree. A negative value means no limit.
-low_voltage: 13.2 # 4S battery
+low_voltage: 13.2 # 4                                                                                                                    S battery
 ctrl_mode: 0  # 0: origin 1: so3ctrl
 imu_a_lpf_cutoff_freq: 10 # Hz
 
@@ -23,7 +23,7 @@ thrust_model: # The model that maps thrust signal u(0~1) to real thrust force F(
     K2: 1.6942 # Needs precise calibration!
     K3: 0.6786 # Needs precise calibration! K3 equals THR_MDL_FAC in https://docs.px4.io/master/en/config_mc/pid_tuning_guide_multicopter.html.
     # approximate thrust mapping parameters
-    hover_percentage: 0.41 # Thrust percentage in Stabilize/Arco mode # *
+    hover_percentage: 0.47 # Thrust percentage in Stabilize/Arco mode # *
     rho2: 0.998
 
 gain:
