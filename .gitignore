@@ -1,0 +1,17 @@
+# Catkin workspace build products
+/build/
+/devel/
+/install/
+/build_isolated/
+/devel_isolated/
+/install_isolated/
+/log/
+/logs/
+/.catkin_workspace
+/.catkin_tools/
+# Generated compiler and Python caches
+CMakeFiles/
+CMakeCache.txt
+*.o
+__pycache__/
+*.py[cod]
