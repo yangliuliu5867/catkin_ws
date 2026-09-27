@@ -253,7 +253,7 @@ int main(int argc, char **argv)
                 offboard_mode,
                 arm_command,
                 last_request);
-            SetPosition(0.0, 0.0, 1.0);
+            SetPosition(0.0, 0.0, 0.4);
             position_publisher.publish(position_setpoint);
             break;
 

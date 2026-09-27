@@ -84,7 +84,9 @@ void Lidar_Callback(const nav_msgs::Odometry::ConstPtr &msg)
 {
     pos_lidar = Eigen::Vector3d(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
     vel_lidar = Eigen::Vector3d(msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z);
-    quat_lidar = Eigen::Quaterniond(msg->pose.pose.orientation.w, msg->pose.pose.orientation.x, msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
+    const Eigen::Quaterniond quat_lidar_raw(msg->pose.pose.orientation.w, msg->pose.pose.orientation.x, msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
+    const Eigen::Quaterniond quat_lidar_to_body(Eigen::AngleAxisd(lidar_to_body_pitch_deg * M_PI / 180.0, Eigen::Vector3d::UnitY()));
+    quat_lidar = quat_lidar_raw * quat_lidar_to_body;
     euler_lidar = QuatToEuler(quat_lidar);
 
     if(flag_vision_source == 1)
@@ -186,6 +188,7 @@ int main(int argc, char **argv)
     
     /* parameter */
     nh.param("/px4_estimator/vision_source", flag_vision_source, 0);
+    nh.param("/px4_estimator/lidar_to_body_pitch_deg", lidar_to_body_pitch_deg, 0.0);
 
     /* publisher */
     ros::Publisher ready_pub = nh.advertise<std_msgs::Bool>("/fsm_ctrl/ekf_ready", 1);
@@ -194,7 +197,7 @@ int main(int argc, char **argv)
     /* subscriber */
     ros::NodeHandle pnh("~");
     ros::Subscriber mocap_sub = pnh.subscribe<geometry_msgs::PoseStamped>("mocap_pose", 1, Mocap_Callback);
-    ros::Subscriber lidar_sub = pnh.subscribe<nav_msgs::Odometry>("lidar_odom", 100, Lidar_Callback);    
+    ros::Subscriber lidar_sub = pnh.subscribe<nav_msgs::Odometry>("lidar_odom", 1, Lidar_Callback);    
     ros::Subscriber camera_sub = nh.subscribe<nav_msgs::Odometry>("camera_odom", 1, Camera_Callback);
     ros::Subscriber ranger_sub = nh.subscribe<sensor_msgs::Range>("/tfmini", 1, Ranger_Callback);
     ros::Subscriber pose_sub = nh.subscribe<geometry_msgs::PoseStamped>("/mavros/local_position/pose", 10, Pose_Callback);

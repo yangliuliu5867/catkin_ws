@@ -27,6 +27,7 @@ static Eigen::Vector3d pos_lidar = Eigen::Vector3d::Zero();
 static Eigen::Vector3d vel_lidar = Eigen::Vector3d::Zero();                     
 static Eigen::Quaterniond quat_lidar = Eigen::Quaterniond::Identity();
 static Eigen::Vector3d euler_lidar = Eigen::Vector3d::Zero(); 
+static double lidar_to_body_pitch_deg = 0.0;
 
 /* camera */
 static Eigen::Vector3d pos_camera = Eigen::Vector3d::Zero();

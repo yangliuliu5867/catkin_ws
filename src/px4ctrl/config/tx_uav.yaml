@@ -18,7 +18,7 @@ rc_reverse: # *
 thrust_model: # The model that maps thrust signal u(0~1) to real thrust force F(Unit:N): F=K1*Voltage^K2*(K3*u^2+(1-K3)*u).
     print_value: false # display the value of “thr_scale_compensate” or “hover_percentage” during thrust model estimating.
     accurate_thrust_model: false # This can always enabled if don't require accurate control performance :-)
-    # accurate thrust mapping parameters
+    # accurate thrust mapping parameters    
     K1: 0.7583 # Needs precise calibration!
     K2: 1.6942 # Needs precise calibration!
     K3: 0.6786 # Needs precise calibration! K3 equals THR_MDL_FAC in https://docs.px4.io/master/en/config_mc/pid_tuning_guide_multicopter.html.
@@ -28,11 +28,11 @@ thrust_model: # The model that maps thrust signal u(0~1) to real thrust force F(
 
 gain:
     # Cascade PID controller. Recommend to read the code.
-    Kp0: 3.2
+    Kp0: 2.0
     Kp1: 3.2
-    Kp2: 5.0
-    Kv0: 2.4
-    Kv1: 2.4
+    Kp2: 4.4
+    Kv0: 4.5
+    Kv1: 4.0
     Kv2: 2.8
     # ↓↓↓ No use now --
     Kvi0: 0.0
