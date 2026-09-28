@@ -1,15 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <launch>
-    <arg name="mav_name" default="tx_uav" />
     <arg name="enable_goal_publish" default="true" />
-    <arg name="enable_px4ctrl" default="true" />
-    <arg name="engine_collision_bs72" default="/home/liet/mpd_splines/small/best_model_multimat.engine" />
-    <arg name="engine_collision_bs1" default="/home/liet/mpd_splines/small/best_model_multimat_bs1.engine" />
-    <arg name="engine_student" default="/home/liet/mpd_splines/small/student_distilled.engine" />
+    <arg name="enable_nmpc" default="true" />
+    <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
+    <arg name="lidar_to_body_pitch_deg" default="-25.3" />
+    <arg name="point_cloud_use_pcd" default="false" />
+    <arg name="online_map_topic" default="/rm_node/rog_map/occ" />
+    <arg name="online_map_update_period" default="0.5" />
+    <arg name="online_replan_period" default="1.0" />
+    <arg name="mpd_model_dir" default="$(env HOME)/mpd_splines/small" />
+    <arg name="engine_collision_bs72" default="$(arg mpd_model_dir)/best_model_multimat.engine" />
+    <arg name="engine_collision_bs1" default="$(arg mpd_model_dir)/best_model_multimat_bs1.engine" />
+    <arg name="engine_student" default="$(arg mpd_model_dir)/student_distilled.engine" />
     <arg name="use_cuda_graph" default="true" />
     <arg name="verbose_timing" default="false" />
     <arg name="pointseq_topic" default="/real/MyPointSeq" />
     <arg name="ext_force_topic" default="/real/external_force_est" />
+    <arg name="use_external_force_collision_hold" default="false" />
     <arg name="use_time_based_collision_end_trigger" default="false" />
     <arg name="enable_pre_align" default="true" />
     <arg name="pre_align_altitude" default="1.00" />
@@ -21,20 +28,17 @@
     <rosparam file="$(find real_flight_bringup)/config/vehicle.yaml" command="load" />
     <rosparam file="$(find real_flight_bringup)/config/mission.yaml" command="load" />
 
-    <!-- 1) IMU + mocap fusion: publish odom and IMU-derived fused states -->
-    <node pkg="imu_mocap_fusion" type="imu_mocap_fusion_node" name="imu_mocap_fusion" output="screen">
-        <param name="cfgPath" value="$(find real_flight_bringup)/config/imu_mocap_fusion_real.yaml" />
-        <remap from="~mocap" to="/vrpn_client_node/$(arg mav_name)/pose" />
-        <remap from="~imu" to="/mavros/imu/data" />
-        <remap from="~odom" to="/visual_slam/odom" />
-        <remap from="~imf" to="/imu_mocap_fusion/imf_out" />
-    </node>
+    <!-- 1) Point-LIO localization. -->
+    <include file="$(find real_flight_bringup)/launch/localization.launch">
+        <arg name="lidar_odom_topic" value="$(arg lidar_odom_topic)" />
+        <arg name="lidar_to_body_pitch_deg" value="$(arg lidar_to_body_pitch_deg)" />
+    </include>
 
     <!-- 2) External wrench estimation from fused state + ESC -->
     <node pkg="external_wrench_estimation" type="external_wrench_estimation_node"
           name="external_wrench_estimation" output="screen">
         <param name="cfgPath" value="$(find real_flight_bringup)/config/external_wrench_estimation_real.yaml" />
-        <remap from="~imf" to="/imu_mocap_fusion/imf_out" />
+        <remap from="~imf" to="/estimator/state" />
         <remap from="~rmu" to="/mavros/esc_status" />
         <remap from="~ewe" to="/external_wrench_estimation/ewe_out" />
         <remap from="~eweBias" to="/external_wrench_estimation/ewe_bias_out" />
@@ -48,7 +52,7 @@
         <param name="output_frame_id" value="world" />
     </node>
 
-    <!-- Front-end planner: static PCD + dynamic start from current odom -->
+    <!-- 前端规划器：默认接收 ROG-Map 在线占据点云，并随地图更新重规划。 -->
     <node pkg="intention_get_corridor" type="intention_get_corridor_node"
           name="intention_get_corridor" output="screen">
         <param name="RunInConsole" type="bool" value="0" />
@@ -62,6 +66,10 @@
         <param name="use_time_based_collision_end_trigger" value="$(arg use_time_based_collision_end_trigger)" />
         <rosparam file="$(find real_flight_bringup)/config/intention_real.yaml" command="load" />
         <rosparam file="$(find real_flight_bringup)/config/mission.yaml" command="load" />
+        <param name="PointCloudUsePCD" type="bool" value="$(arg point_cloud_use_pcd)" />
+        <param name="OnlineMapTopic" value="$(arg online_map_topic)" />
+        <param name="OnlineMapUpdatePeriod" type="double" value="$(arg online_map_update_period)" />
+        <param name="OnlineReplanPeriod" type="double" value="$(arg online_replan_period)" />
     </node>
 
     <!-- Trajectory generation -->
@@ -77,12 +85,13 @@
     </node>
 
     <!-- Polynomial trajectory sampler -> PositionCommand -->
-    <node pkg="px4ctrl" type="polytraj_poscmd_bridge_node" name="polytraj_poscmd_bridge" output="screen">
+    <node pkg="real_flight_bringup" type="polytraj_poscmd_bridge_node" name="polytraj_poscmd_bridge" output="screen">
         <rosparam file="$(find real_flight_bringup)/config/polytraj_poscmd_bridge.yaml" command="load" />
         <param name="cmd_topic" value="/position_command" />
         <param name="ext_force_topic" value="$(arg ext_force_topic)" />
-        <param name="use_external_force_collision_hold" value="true" />
-        <param name="external_force_collision_threshold" value="4.0" />
+        <!-- 保持原实验逻辑：连续跟踪碰撞前、碰撞过渡和碰撞后轨迹，
+             只把下游轨迹跟踪器替换为 NMPC。 -->
+        <param name="use_external_force_collision_hold" value="$(arg use_external_force_collision_hold)" />
     </node>
 
     <!-- Goal trigger (endpoint is read from /SetPos in mission.yaml) -->
@@ -110,12 +119,11 @@
         <param name="odom_wait_timeout_sec" value="$(arg pre_align_timeout_sec)" />
     </node>
 
-    <!-- Optional: real low-level control -->
-    <node if="$(arg enable_px4ctrl)" pkg="px4ctrl" type="px4ctrl_node" name="px4ctrl" output="screen">
-        <rosparam command="load" file="$(find px4ctrl)/config/tx_uav.yaml" />
-        <rosparam command="load" file="$(find real_flight_bringup)/config/px4ctrl_poscmd_override.yaml" />
-        <remap from="~odom" to="/visual_slam/odom" />
-        <remap from="~cmd" to="/position_command" />
+    <!-- Primary low-level controller: Jiangyin FSM + NMPC. cmd5 tracks /position_command. -->
+    <node if="$(arg enable_nmpc)" pkg="fsm_ctrl" type="single_offboard_fsm"
+          name="single_offboard_fsm" output="screen">
+        <rosparam command="load" file="$(find real_flight_bringup)/config/nmpc.yaml" />
+        <param name="nmpc_hover_z" value="$(arg pre_align_altitude)" />
     </node>
-</launch>
 
+</launch>

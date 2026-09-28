@@ -8,7 +8,7 @@
             value="$(find external_wrench_estimation)/config/external_wrench_estimation.yaml" />
 
         <!-- subscribe -->
-        <remap from="~imf" to="/$(arg mav_name)/imu_mocap_fusion/imf_out" />
+        <remap from="~imf" to="/estimator/state" />
         <remap from="~rmu" to="/mavros/esc_status" />
 
         <!-- publish -->

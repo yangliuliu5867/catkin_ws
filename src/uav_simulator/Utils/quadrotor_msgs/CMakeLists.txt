@@ -46,6 +46,7 @@ project(quadrotor_msgs)
 find_package(catkin REQUIRED COMPONENTS
   #armadillo
   roscpp
+  std_msgs
   nav_msgs
   geometry_msgs
   message_generation
@@ -69,6 +70,8 @@ add_message_files(
   OutputData.msg
   OptCostDebug.msg
   PositionCommand.msg
+  PositionCommandArray.msg
+  EstimatorState.msg
   PPROutputData.msg
   Serial.msg
   SO3Command.msg
@@ -94,6 +97,7 @@ generate_messages(
     DEPENDENCIES
     geometry_msgs
     nav_msgs
+    std_msgs
 )
 
 catkin_package(
@@ -101,7 +105,7 @@ catkin_package(
   LIBRARIES encode_msgs decode_msgs
   #CATKIN_DEPENDS geometry_msgs nav_msgs
   #DEPENDS system_lib
-  CATKIN_DEPENDS message_runtime
+  CATKIN_DEPENDS geometry_msgs nav_msgs std_msgs message_runtime
 )
 
 # add_executable(test_exe src/test_exe.cpp)
@@ -120,4 +124,3 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 #     decode_msgs 
 #     encode_msgs
 # )
-

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+  <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
+  <arg name="lidar_to_body_pitch_deg" default="-25.3" />
+  <arg name="pre_align_altitude" default="1.0" />
+
+  <rosparam file="$(find real_flight_bringup)/config/vehicle.yaml" command="load" />
+
+  <include file="$(find real_flight_bringup)/launch/localization.launch">
+    <arg name="lidar_odom_topic" value="$(arg lidar_odom_topic)" />
+    <arg name="lidar_to_body_pitch_deg" value="$(arg lidar_to_body_pitch_deg)" />
+  </include>
+
+  <node pkg="external_wrench_estimation" type="external_wrench_estimation_node"
+        name="external_wrench_estimation" output="screen">
+    <param name="cfgPath" value="$(find real_flight_bringup)/config/external_wrench_estimation_real.yaml" />
+    <remap from="~imf" to="/estimator/state" />
+    <remap from="~rmu" to="/mavros/esc_status" />
+    <remap from="~ewe" to="/external_wrench_estimation/ewe_out" />
+    <remap from="~eweBias" to="/external_wrench_estimation/ewe_bias_out" />
+  </node>
+
+  <!-- 原碰撞恢复状态机生成 PositionCommand；它不发布姿态或油门。 -->
+  <node pkg="real_flight_bringup" type="collision_recovery_nmpc_node"
+        name="collision_recovery" output="screen">
+    <rosparam command="load"
+              file="$(find real_flight_bringup)/config/collision_recovery_nmpc.yaml" />
+    <remap from="~odom" to="/visual_slam/odom" />
+    <remap from="~ewe" to="/external_wrench_estimation/ewe_out" />
+    <remap from="~cmd" to="/position_command" />
+  </node>
+
+  <!-- 唯一底层控制器：cmd 5 用 NMPC 跟踪恢复节点的 PositionCommand。 -->
+  <node pkg="fsm_ctrl" type="single_offboard_fsm"
+        name="single_offboard_fsm" output="screen">
+    <rosparam command="load" file="$(find real_flight_bringup)/config/nmpc.yaml" />
+    <param name="nmpc_hover_z" value="$(arg pre_align_altitude)" />
+  </node>
+
+  <!-- 先用 cmd 3 悬停，再输入 cmd 5；恢复节点收到 cmd 5 后从当前位置开始实验。 -->
+</launch>

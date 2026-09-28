@@ -3,8 +3,9 @@
   <!-- Minimal real-flight chain for collision-controller experiments.
        Note: this launch does NOT start MAVROS; run your MAVROS separately. -->
 
-  <arg name="mav_name" default="tx_uav" />
-  <arg name="enable_px4ctrl" default="true" />
+  <arg name="enable_nmpc" default="true" />
+  <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
+  <arg name="lidar_to_body_pitch_deg" default="-25.3" />
 
   <!-- Planning / MINCO (gcopter) chain -->
   <arg name="enable_intention" default="false" />
@@ -14,9 +15,10 @@
   <!-- <arg name="enable_poscmd_admittance_overlay" default="true" /> -->
 
   <!-- TRT engines (used by intention_get_corridor / traj_gen_in_corridor startup) -->
-  <arg name="engine_collision_bs72" default="/home/liet/mpd_splines/small/best_model_multimat.engine" />
-  <arg name="engine_collision_bs1" default="/home/liet/mpd_splines/small/best_model_multimat_bs1.engine" />
-  <arg name="engine_student" default="/home/liet/mpd_splines/small/student_distilled.engine" />
+  <arg name="mpd_model_dir" default="$(env HOME)/mpd_splines/small" />
+  <arg name="engine_collision_bs72" default="$(arg mpd_model_dir)/best_model_multimat.engine" />
+  <arg name="engine_collision_bs1" default="$(arg mpd_model_dir)/best_model_multimat_bs1.engine" />
+  <arg name="engine_student" default="$(arg mpd_model_dir)/student_distilled.engine" />
   <arg name="use_cuda_graph" default="true" />
   <arg name="verbose_timing" default="false" />
 
@@ -38,20 +40,17 @@
   <rosparam file="$(find real_flight_bringup)/config/vehicle.yaml" command="load" />
   <rosparam file="$(find real_flight_bringup)/config/mission.yaml" command="load" />
 
-  <!-- 1) IMU + mocap fusion -->
-  <node pkg="imu_mocap_fusion" type="imu_mocap_fusion_node" name="imu_mocap_fusion" output="screen">
-    <param name="cfgPath" value="$(find real_flight_bringup)/config/imu_mocap_fusion_real.yaml" />
-    <remap from="~mocap" to="/vrpn_client_node/$(arg mav_name)/pose" />
-    <remap from="~imu" to="/mavros/imu/data" />
-    <remap from="~odom" to="/visual_slam/odom" />
-    <remap from="~imf" to="/imu_mocap_fusion/imf_out" />
-  </node>
+  <!-- 1) Point-LIO localization. -->
+  <include file="$(find real_flight_bringup)/launch/localization.launch">
+    <arg name="lidar_odom_topic" value="$(arg lidar_odom_topic)" />
+    <arg name="lidar_to_body_pitch_deg" value="$(arg lidar_to_body_pitch_deg)" />
+  </include>
 
   <!-- 2) External wrench estimation -->
   <node pkg="external_wrench_estimation" type="external_wrench_estimation_node"
         name="external_wrench_estimation" output="screen">
     <param name="cfgPath" value="$(find real_flight_bringup)/config/external_wrench_estimation_real.yaml" />
-    <remap from="~imf" to="/imu_mocap_fusion/imf_out" />
+    <remap from="~imf" to="/estimator/state" />
     <remap from="~rmu" to="/mavros/esc_status" />
     <remap from="~ewe" to="/external_wrench_estimation/ewe_out" />
     <remap from="~eweBias" to="/external_wrench_estimation/ewe_bias_out" />
@@ -105,7 +104,7 @@
   </node>
 
   <!-- Polynomial trajectory sampler -> PositionCommand -->
-  <node if="$(arg enable_polytraj_bridge)" pkg="px4ctrl" type="polytraj_poscmd_bridge_node"
+  <node if="$(arg enable_polytraj_bridge)" pkg="real_flight_bringup" type="polytraj_poscmd_bridge_node"
         name="polytraj_poscmd_bridge" output="screen">
     <rosparam file="$(find real_flight_bringup)/config/polytraj_poscmd_bridge.yaml" command="load" />
     <param name="cmd_topic" value="/position_command" />
@@ -132,12 +131,11 @@
     <param name="odom_wait_timeout_sec" value="20.0" />
   </node>
 
-  <!-- Low-level controller driven by PositionCommand -->
-  <node if="$(arg enable_px4ctrl)" pkg="px4ctrl" type="px4ctrl_node" name="px4ctrl" output="screen">
-    <rosparam command="load" file="$(find px4ctrl)/config/tx_uav.yaml" />
-    <rosparam command="load" file="$(find real_flight_bringup)/config/px4ctrl_poscmd_override.yaml" />
-    <remap from="~odom" to="/visual_slam/odom" />
-    <remap from="~cmd" to="/position_command" />
+  <!-- Primary controller. cmd5 tracks the planner's /position_command. -->
+  <node if="$(arg enable_nmpc)" pkg="fsm_ctrl" type="single_offboard_fsm"
+        name="single_offboard_fsm" output="screen">
+    <rosparam command="load" file="$(find real_flight_bringup)/config/nmpc.yaml" />
+    <param name="nmpc_hover_z" value="$(arg pre_align_altitude)" />
   </node>
 
   <!-- Test orchestrator: disabled in direct PositionCommand tuning mode -->

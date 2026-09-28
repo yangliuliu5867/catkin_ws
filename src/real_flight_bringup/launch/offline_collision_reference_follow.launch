@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <launch>
-  <arg name="mav_name" default="tx_uav" />
-  <arg name="enable_px4ctrl" default="true" />
+  <arg name="enable_nmpc" default="true" />
+  <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
+  <arg name="lidar_to_body_pitch_deg" default="-25.3" />
 
   <arg name="reference_csv" default="/home/liet/catkin_ws/data_/collision_reference.csv" />
   <arg name="cmd_topic" default="/position_command" />
@@ -14,13 +15,10 @@
 
   <rosparam file="$(find real_flight_bringup)/config/vehicle.yaml" command="load" />
 
-  <node pkg="imu_mocap_fusion" type="imu_mocap_fusion_node" name="imu_mocap_fusion" output="screen">
-    <param name="cfgPath" value="$(find real_flight_bringup)/config/imu_mocap_fusion_real.yaml" />
-    <remap from="~mocap" to="/vrpn_client_node/$(arg mav_name)/pose" />
-    <remap from="~imu" to="/mavros/imu/data" />
-    <remap from="~odom" to="/visual_slam/odom" />
-    <remap from="~imf" to="/imu_mocap_fusion/imf_out" />
-  </node>
+  <include file="$(find real_flight_bringup)/launch/localization.launch">
+    <arg name="lidar_odom_topic" value="$(arg lidar_odom_topic)" />
+    <arg name="lidar_to_body_pitch_deg" value="$(arg lidar_to_body_pitch_deg)" />
+  </include>
 
   <node pkg="real_flight_bringup" type="publish_reference_start_once.py"
         name="publish_reference_start_once" output="screen">
@@ -65,10 +63,11 @@
     <param name="start_warn_threshold" value="0.5" />
   </node>
 
-  <node if="$(arg enable_px4ctrl)" pkg="px4ctrl" type="px4ctrl_node" name="px4ctrl" output="screen">
-    <rosparam command="load" file="$(find px4ctrl)/config/tx_uav.yaml" />
-    <rosparam command="load" file="$(find real_flight_bringup)/config/px4ctrl_poscmd_override.yaml" />
-    <remap from="~odom" to="/visual_slam/odom" />
-    <remap from="~cmd" to="$(arg cmd_topic)" />
+  <node if="$(arg enable_nmpc)" pkg="fsm_ctrl" type="single_offboard_fsm"
+        name="single_offboard_fsm" output="screen">
+    <rosparam command="load" file="$(find real_flight_bringup)/config/nmpc.yaml" />
+    <param name="planner_command_topic" value="$(arg cmd_topic)" />
+    <param name="nmpc_hover_z" value="$(arg pre_align_altitude)" />
   </node>
+
 </launch>

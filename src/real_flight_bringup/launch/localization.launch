@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+  <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
+  <arg name="selected_odom_topic" default="/visual_slam/odom" />
+  <arg name="lidar_to_body_pitch_deg" default="-25.3" />
+
+  <!-- Point-LIO is the only localization source. -->
+  <include file="$(find fsm_ctrl)/launch/px4_estimator.launch">
+    <arg name="lidar_odom_topic" value="$(arg lidar_odom_topic)" />
+    <arg name="selected_odom_topic" value="$(arg selected_odom_topic)" />
+    <arg name="lidar_to_body_pitch_deg" value="$(arg lidar_to_body_pitch_deg)" />
+  </include>
+
+  <!-- Build the generic state input used by external-wrench estimation. -->
+  <node pkg="real_flight_bringup" type="lidar_imu_state_bridge"
+        name="lidar_imu_state_bridge" output="screen">
+    <param name="odom_topic" value="$(arg selected_odom_topic)" />
+    <param name="imu_topic" value="/mavros/imu/data" />
+    <param name="output_topic" value="/estimator/state" />
+  </node>
+</launch>

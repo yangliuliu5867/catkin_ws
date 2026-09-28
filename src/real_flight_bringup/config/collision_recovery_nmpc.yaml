@@ -1,0 +1,29 @@
+# 旧碰撞恢复状态机参数。节点只生成 PositionCommand，最终由 NMPC 跟踪。
+AdmittanceControl:
+  M_vx: 2.5
+  M_vy: 2.5
+  M_vz: 2.5
+  D_vx: 1.0
+  D_vy: 1.0
+  D_vz: 1.0
+  K_vx: 0.0
+  K_vy: 0.0
+  K_vz: 0.0
+
+# 碰撞前直线运动速度，单位 m/s。
+LinearMotionSpeed:
+  Vx: -2.5
+  Vy: 0.0
+  Vz: 0.0
+
+Threshold:
+  # 开始后先忽略外力，避免起飞/切换瞬态误触发。
+  trigger_delay: 2.0
+  F_trigger_min: 4.0
+  # 碰撞触发后至少执行导纳恢复的时间。
+  dt_fix_min: 0.2
+  # 外力下降到该值后进入速度衰减阶段。
+  F_collision_min: 2.0
+  dt_stop_min: 0.2
+  fix_vel_decay: 0.95
+  stop_vel_max: 0.2

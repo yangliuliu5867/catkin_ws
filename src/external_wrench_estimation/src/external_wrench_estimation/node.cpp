@@ -29,13 +29,13 @@
 #include <string>
 
 #include "external_wrench_estimation/core/external_wrench_estimation.hpp"
-#include "imu_mocap_fusion/ImfOut.h"
+#include <quadrotor_msgs/EstimatorState.h>
 
 using namespace external_wrench_estimation;
 
 std::shared_ptr<ExternalWrenchEstimation> pEWE;
 
-void ImfCb(const imu_mocap_fusion::ImfOut::ConstPtr &msg) {
+void ImfCb(const quadrotor_msgs::EstimatorState::ConstPtr &msg) {
     ExternalWrenchEstimation::MeasureMsg _msg;
 
     _msg.first = msg->header.stamp.toSec();
@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
     pEWE->SetCov(LoadDefaultErrorXcov());
     pEWE->SetParams(LoadDefaultParams(cfg));
 
-    ros::Subscriber imfSub = nh.subscribe<imu_mocap_fusion::ImfOut>("imf", 100, ImfCb);
+    ros::Subscriber imfSub = nh.subscribe<quadrotor_msgs::EstimatorState>("imf", 100, ImfCb);
     ros::Subscriber rmuSub = nh.subscribe<mavros_msgs::ESCStatus>("rmu", 100, RmuCb);
     ros::Publisher ewePub = nh.advertise<geometry_msgs::WrenchStamped>("ewe", 100);
     ros::Publisher eweBiasPub = nh.advertise<geometry_msgs::WrenchStamped>("eweBias", 100);

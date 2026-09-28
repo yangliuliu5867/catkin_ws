@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <launch>
-  <arg name="engine_collision_bs72" default="/home/liet/mpd_splines/small/best_model_multimat.engine" />
-  <arg name="engine_collision_bs1" default="/home/liet/mpd_splines/small/best_model_multimat_bs1.engine" />
-  <arg name="engine_student" default="/home/liet/mpd_splines/small/student_distilled.engine" />
+  <arg name="mpd_model_dir" default="$(env HOME)/mpd_splines/small" />
+  <arg name="engine_collision_bs72" default="$(arg mpd_model_dir)/best_model_multimat.engine" />
+  <arg name="engine_collision_bs1" default="$(arg mpd_model_dir)/best_model_multimat_bs1.engine" />
+  <arg name="engine_student" default="$(arg mpd_model_dir)/student_distilled.engine" />
   <arg name="use_cuda_graph" default="true" />
   <arg name="verbose_timing" default="false" />
   <arg name="pointseq_topic" default="/real/MyPointSeq" />
@@ -12,7 +13,7 @@
   <arg name="reference_png" default="/home/liet/catkin_ws/data_/collision_reference.png" />
   <arg name="stage1_csv" default="/home/liet/catkin_ws/data_/final_traj.csv" />
   <arg name="stage2_csv" default="/home/liet/catkin_ws/data_/optimized_traj.csv" />
-  <arg name="reference_csv" default="/home/liet/catkin_ws/data_/collision_reference.csv" />Q
+  <arg name="reference_csv" default="/home/liet/catkin_ws/data_/collision_reference.csv" />
 
   <!-- Pure planning mode: use a fixed fake odom as start state. -->
   <rosparam param="/PlanningStart">[0.0, -1.25, 1.00]</rosparam>
@@ -62,7 +63,7 @@
     <rosparam file="$(find real_flight_bringup)/config/traj_gen_real.yaml" command="load" />
   </node>
 
-  <node pkg="px4ctrl" type="polytraj_poscmd_bridge_node"
+  <node pkg="real_flight_bringup" type="polytraj_poscmd_bridge_node"
         name="polytraj_poscmd_bridge" output="screen">
     <rosparam file="$(find real_flight_bringup)/config/polytraj_poscmd_bridge.yaml" command="load" />
     <param name="cmd_topic" value="/position_command" />

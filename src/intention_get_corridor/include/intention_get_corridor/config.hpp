@@ -12,6 +12,7 @@ struct Config
     std::string odomTopic;              
     std::string targetTopic;           
     std::string pointCloudPath;       
+    std::string onlineMapTopic;
     std::string corridorPath;           
     double dilateRadius;               
     double gridResolution;              
@@ -20,6 +21,8 @@ struct Config
     std::vector<double> expectedHeight; 
     int outlierThreshold;            
     bool useLoadPCDFile;                
+    double onlineMapUpdatePeriod;
+    double onlineReplanPeriod;
     double astar_weight;               
     int cnt_pos;                        
     std::vector<double> set_att;        
@@ -62,6 +65,7 @@ struct Config
         nh_priv.getParam("OdomTopic", odomTopic);
         nh_priv.getParam("TargetTopic", targetTopic);
         nh_priv.getParam("PointCloudPath", pointCloudPath);
+        nh_priv.param<std::string>("OnlineMapTopic", onlineMapTopic, std::string("/rm_node/rog_map/occ"));
         nh_priv.getParam("CorridorPath", corridorPath);
         nh_priv.getParam("DilateRadius", dilateRadius);
         nh_priv.getParam("GridResolution", gridResolution);
@@ -70,6 +74,8 @@ struct Config
         nh_priv.getParam("ExpectedHeight", expectedHeight);
         nh_priv.getParam("OutlierThreshold", outlierThreshold);
         nh_priv.getParam("PointCloudUsePCD", useLoadPCDFile);
+        nh_priv.param("OnlineMapUpdatePeriod", onlineMapUpdatePeriod, 0.5);
+        nh_priv.param("OnlineReplanPeriod", onlineReplanPeriod, 1.0);
         nh_priv.getParam("Astar_weight", astar_weight);
         nh_priv.getParam("SetPos", set_pos);
         nh_priv.getParam("SetAtt", set_att);

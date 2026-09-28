@@ -5,6 +5,11 @@ start_trigger_topic: /traj_start_trigger
 ext_force_topic: /external_force_est
 
 cmd_topic: /position_command
+horizon_topic: /position_command_horizon
+
+# 与当前 NMPC 的 8 步、0.05 s 预测配置对应：9个状态节点，共0.4 s。
+horizon_points: 9
+horizon_dt: 0.05
 
 pred_pose_topic: /trajectory_predicted_pose
 pred_vel_topic: /trajectory_predicted_velocity
@@ -16,16 +21,16 @@ collision_trigger_topic: /collision_trigger
 publish_rate: 50.0
 traj_start_delay: 0.0
 
-# Time-based planned collision handling used by preview / legacy mode.
-# When `use_external_force_collision_hold` is false, the bridge uses the
-# collision event's planned time window and blends pre/post collision velocity.
+# 原项目的主动碰撞执行方式：按照规划时间连续执行碰撞前轨迹、
+# 碰撞瞬间的速度过渡和碰撞后恢复轨迹。
+# `use_external_force_collision_hold=false` 时，桥接器按照碰撞事件的规划时间窗口，
+# 衔接碰撞前后的速度。
 collision_transition_duration: 0.15
 planned_collision_hold_sec: 0.15
 
-# Real-flight external-force collision hold:
-# - |F_ext| > threshold: hold current position, zero linear velocity, keep height,
-#   and set desired yaw to current odom yaw each cycle.
-# - |F_ext| < threshold: keep holding until a new post-collision trajectory arrives.
+# 外力触发的定点保持是备用保护模式，不是主动碰撞实验的默认执行方式：
+# - |F_ext| 超过阈值：保持当前位置、速度清零，并保持当前高度和航向；
+# - |F_ext| 降到阈值以下：继续保持，直到收到新的碰撞后轨迹。
 use_external_force_collision_hold: false
 external_force_collision_threshold: 4.0
 

@@ -41,7 +41,7 @@
    <max_array_size value="100"/>
    <boolean_strings_to_number value="true"/>
    <remove_suffix_from_strings value="true"/>
-   <selected_topics value="/mavros/imu/data;/tx_uav/imu_mocap_fusion/odom;/vrpn_client_node/tx_uav/pose"/>
+   <selected_topics value="/mavros/imu/data;/visual_slam/odom;/aft_mapped_to_init"/>
   </plugin>
   <plugin ID="DataLoad ULog"/>
   <plugin ID="ROS Topic Subscriber">
@@ -50,7 +50,7 @@
    <max_array_size value="100"/>
    <boolean_strings_to_number value="true"/>
    <remove_suffix_from_strings value="true"/>
-   <selected_topics value="/mavros/imu/data;/tx_uav/imu_mocap_fusion/odom;/vrpn_client_node/tx_uav/pose;/tx_uav/external_wrench_estimation/ewe_test;/tx_uav/imu_mocap_fusion/imf_out"/>
+   <selected_topics value="/mavros/imu/data;/visual_slam/odom;/aft_mapped_to_init;/tx_uav/external_wrench_estimation/ewe_test;/estimator/state"/>
   </plugin>
   <plugin ID="UDP Server"/>
   <plugin ID="WebSocket Server"/>

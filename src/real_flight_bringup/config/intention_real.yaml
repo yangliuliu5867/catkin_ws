@@ -1,19 +1,23 @@
-# Front-end planner config for real flight with static PCD map.
+# 实飞前端规划配置：默认使用 Point-LIO + ROG-Map 在线占据点云。
+# 如需复现旧的静态地图实验，可在 launch 中传 point_cloud_use_pcd:=true。
 
-InfMapTopic: "/globalmap"
+InfMapTopic: "/planner/inflated_map"
 OdomTopic: "/visual_slam/odom"
 TargetTopic: "/goal"
 
-PointCloudUsePCD: true
-# NOTE: intention_get_corridor loads as (its_package_path + PointCloudPath).
-# The path below intentionally jumps to this bringup package.
+PointCloudUsePCD: false
+OnlineMapTopic: "/rm_node/rog_map/occ"
+OnlineMapUpdatePeriod: 0.5
+OnlineReplanPeriod: 1.0
+# 静态 PCD 回退路径。intention_get_corridor 会在自身包路径后拼接该值。
 PointCloudPath: "/../real_flight_bringup/config/maps/static_map.pcd"
 CorridorPath: "/../real_flight_bringup/config/test_corridor.txt"
 
 OutlierThreshold: 1
 DilateRadius: 0.26
 GridResolution: 0.10
-R3Bound: [-1.5, 5.0, -2.6, 3.5, 0.0, 2.0]
+# 在线规划体素边界；应覆盖预期飞行区域，超出该范围的点不会进入规划地图。
+R3Bound: [-10.0, 10.0, -10.0, 10.0, 0.0, 3.0]
 LocalBoxHalfWidth: 3.0
 ExpectedHeight: [0.5, 2.0]
 Astar_weight: 2.0

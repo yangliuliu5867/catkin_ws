@@ -1,0 +1,14 @@
+/build/
+/devel/
+/install/
+/build_isolated/
+/devel_isolated/
+/install_isolated/
+/log/
+/logs/
+/.catkin_tools/
+CMakeFiles/
+CMakeCache.txt
+*.o
+__pycache__/
+*.py[cod]

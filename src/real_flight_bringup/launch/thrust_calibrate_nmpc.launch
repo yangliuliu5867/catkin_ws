@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+  <!-- 只记录 NMPC 实际发送的油门和电池电压，不启动任何控制器。 -->
+  <arg name="mass_kg" default="1.17" />
+  <arg name="min_battery_voltage" default="13.2" />
+  <arg name="output_csv" default="$(env HOME)/.ros/nmpc_thrust_calibration.csv" />
+
+  <node pkg="real_flight_bringup" type="thrust_calibrate_nmpc.py"
+        name="thrust_calibration" output="screen">
+    <param name="mass_kg" value="$(arg mass_kg)" />
+    <param name="min_battery_voltage" value="$(arg min_battery_voltage)" />
+    <param name="output_csv" value="$(arg output_csv)" />
+  </node>
+</launch>

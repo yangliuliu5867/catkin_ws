@@ -22,6 +22,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <cstdint>
 #include <queue>
 #include <deque>
 #include <limits>
@@ -94,6 +95,10 @@ private:
     ros::Publisher frontierPlanePub;
 
     std::atomic<bool> mapInitialized{false}, odomInitialized{false};
+    std::atomic<bool> has_active_goal_{false};
+    std::atomic<uint64_t> online_map_version_{0};
+    ros::Time last_online_map_update_;
+    ros::Time last_online_replan_;
     // preset-related auto-trigger removed to avoid redundancy
     std::shared_ptr<GlobalMap> glbMapPtr;
     Visualizer visualizer;
@@ -202,6 +207,7 @@ private:
 
     // 防止“剩余时间触发 + 边沿触发”同时派发多个异步重规划线程。
     std::atomic<bool> replan_dispatch_inflight_{false};
+    std::atomic<bool> replan_requested_{false};
 
     // 冷却：分别用于“剩余时间触发”和“边沿触发(碰撞结束)”
     ros::Time last_time_trigger_replan_time_{ros::Time(0)};
@@ -448,8 +454,9 @@ private:
     // Mark candidates as verified frontier by sampling outside along plane normal using safeQuery.
     inline void markVerifiedFrontiersBySafeQuery(std::vector<PlaneCandidate> &candidates)
     {
-        if (!glbMapPtr || !glbMapPtr->ogmPtr) return;
-        auto ogm = glbMapPtr->ogmPtr;
+        auto map_snapshot = std::atomic_load(&glbMapPtr);
+        if (!map_snapshot || !map_snapshot->ogmPtr) return;
+        auto ogm = map_snapshot->ogmPtr;
         const double base = std::max(0.05, ogm->getScale() * 0.5);
         const double offsets[3] = {0.0, 0.10, 0.20};
 
@@ -467,7 +474,7 @@ private:
             {
                 Eigen::Vector3d sample_p = c.point_on_plane + (base + offsets[oi]) * c.normal_unit;
                 bool free = false;
-                try { free = glbMapPtr->safeQuery(sample_p); } catch(...) { free = false; }
+                try { free = map_snapshot->safeQuery(sample_p); } catch(...) { free = false; }
                 if (!free) { all_free = false; break; }
             }
             c.verified_frontier = all_free;
@@ -545,7 +552,7 @@ public:
         keyPosPub = nh.advertise<quadrotor_msgs::TrajectoryPlan>("key_pos", 1000);
         collision_trajectory_pub_ = nh.advertise<quadrotor_msgs::CollisionTrajectory>("complete_collision_trajectory", 1000);  // 发布 CollisionTrajectory
         targetPub = nh.advertise<geometry_msgs::PoseStamped>(config.targetTopic, 1);
-        mapSub = nh.subscribe("/globalmap", 1,
+        mapSub = nh.subscribe(config.onlineMapTopic, 1,
                               &GlobalPlanner::MapCallback, this,
                               ros::TransportHints().tcpNoDelay());
         boundSub = nh.subscribe("/boundmap", 1,
@@ -611,6 +618,13 @@ public:
         // A* planner (used for global path search + local corridor generation when BFS is disabled)
         astar_planner_ = std::make_unique<astar_ros>(nh, config);
 
+        if (!config.useLoadPCDFile)
+        {
+            ROS_INFO("Online planning enabled: map input=%s, map update period=%.2fs, replan period=%.2fs",
+                     config.onlineMapTopic.c_str(), config.onlineMapUpdatePeriod,
+                     config.onlineReplanPeriod);
+        }
+
         nh.param("special_scene_post_collision_wait_sec",
                  special_scene_post_collision_wait_sec_,
                  special_scene_post_collision_wait_sec_);
@@ -634,26 +648,44 @@ public:
         if (!reason)
             reason = "unknown";
 
-        // Only allow one inflight replan thread at a time.
+        // Keep one worker, but remember map updates arriving while it is planning.
+        // This guarantees that the newest online map eventually gets a planning pass.
+        replan_requested_.store(true);
         if (replan_dispatch_inflight_.exchange(true))
             return;
 
         std::thread([this, reason]() {
-            try
+            while (true)
             {
-                quadrotor_msgs::TrajectoryPlan tmp_plan;
-                Eigen::Matrix3Xd dummy_keypos;
-                this->getCorridorFromSetPos(tmp_plan, dummy_keypos);
+                replan_requested_.store(false);
+                try
+                {
+                    quadrotor_msgs::TrajectoryPlan tmp_plan;
+                    Eigen::Matrix3Xd dummy_keypos;
+                    this->getCorridorFromSetPos(tmp_plan, dummy_keypos);
+                }
+                catch (const std::exception &e)
+                {
+                    ROS_WARN("Exception in getCorridorFromSetPos (%s): %s", reason, e.what());
+                }
+                catch (...)
+                {
+                    ROS_WARN("Unknown exception in getCorridorFromSetPos (%s)", reason);
+                }
+
+                if (replan_requested_.exchange(false))
+                    continue;
+
+                replan_dispatch_inflight_.store(false);
+                // Close the small race where a request arrives between the exchange above
+                // and clearing the inflight flag.
+                if (replan_requested_.exchange(false))
+                {
+                    if (!replan_dispatch_inflight_.exchange(true))
+                        continue;
+                }
+                break;
             }
-            catch (const std::exception &e)
-            {
-                ROS_WARN("Exception in getCorridorFromSetPos (%s): %s", reason, e.what());
-            }
-            catch (...)
-            {
-                ROS_WARN("Unknown exception in getCorridorFromSetPos (%s)", reason);
-            }
-            replan_dispatch_inflight_.store(false);
         }).detach();
     }
 
@@ -800,14 +832,15 @@ private:
                                        std::vector<Eigen::Vector3d> &out_path)
     {
         out_path.clear();
-        if (!mapInitialized.load() || !glbMapPtr)
+        auto map_snapshot = std::atomic_load(&glbMapPtr);
+        if (!mapInitialized.load() || !map_snapshot)
             return false;
         if (!astar_planner_)
             return false;
 
         pcl::PointCloud<pcl::PointXYZ> infcloud;
         try {
-            glbMapPtr->getPointCloud(infcloud, config.expectedHeight[1]);
+            map_snapshot->getPointCloud(infcloud, config.expectedHeight[1]);
         } catch (...) {
             return false;
         }
@@ -832,7 +865,7 @@ private:
     // This replaces the periodic corridor worker.
     inline bool ensureGlobalAstarPathAndFullCorridorBuilt()
     {
-        if (!odomInitialized.load() || !mapInitialized.load() || !glbMapPtr)
+        if (!odomInitialized.load() || !mapInitialized.load() || !std::atomic_load(&glbMapPtr))
             return false;
 
         // Snapshot shared inputs
@@ -1025,7 +1058,8 @@ private:
         }
 
         // Graph distance limit (NOT arc length): <= 13m in grid steps.
-        auto ogm = (glbMapPtr && glbMapPtr->ogmPtr) ? glbMapPtr->ogmPtr : nullptr;
+        auto map_snapshot = std::atomic_load(&glbMapPtr);
+        auto ogm = (map_snapshot && map_snapshot->ogmPtr) ? map_snapshot->ogmPtr : nullptr;
         double cellS = this->config.gridResolution;
         if (ogm)
         {
@@ -1167,7 +1201,8 @@ private:
             ROS_WARN("Cannot build A* corridor: missing odom or map");
             return false;
         }
-        if (!glbMapPtr || !glbMapPtr->ogmPtr)
+        auto map_snapshot = std::atomic_load(&glbMapPtr);
+        if (!map_snapshot || !map_snapshot->ogmPtr)
             return false;
 
         // snapshot shared inputs
@@ -1250,16 +1285,19 @@ private:
     inline void initializeMapImpl(void)
     {
         pcl::PointCloud<pcl::PointXYZ> cloudDense;
+        {
+            std::lock_guard<std::mutex> lk(bound_mutex_);
+            bound_min(0) = config.r3Bound[0];
+            bound_min(1) = config.r3Bound[2];
+            bound_min(2) = config.r3Bound[4];
+            bound_max(0) = config.r3Bound[1];
+            bound_max(1) = config.r3Bound[3];
+            bound_max(2) = config.r3Bound[5];
+        }
         if (config.useLoadPCDFile)
         {
             if (!mapInitialized.load())
             {
-                bound_min(0) = config.r3Bound[0];
-                bound_min(1) = config.r3Bound[2];
-                bound_min(2) = config.r3Bound[4];
-                bound_max(0) = config.r3Bound[1];
-                bound_max(1) = config.r3Bound[3];
-                bound_max(2) = config.r3Bound[5];
                 ROS_INFO("Initializing map from load file!");
                 std::string path = ros::package::getPath("intention_get_corridor");
                 pcl::io::loadPCDFile<pcl::PointXYZ>(path + config.pointCloudPath, cloudDense);
@@ -1297,15 +1335,61 @@ private:
         if (config.useLoadPCDFile)
             return;
 
-        pcl::PointCloud<pcl::PointXYZ> cloudDense;
-        ROS_INFO("Initializing map from callback!");
-        pcl::fromROSMsg(*msg, cloudDense);
-        glbMapPtr->initialize(cloudDense, config.outlierThreshold, bound_min, bound_max);
-        pubMap(cloudDense);
-        mapInitialized.store(true);
+        const ros::Time now = ros::Time::now();
+        if (!last_online_map_update_.isZero() &&
+            (now - last_online_map_update_).toSec() < std::max(0.0, config.onlineMapUpdatePeriod))
+        {
+            return;
+        }
 
-        glbMapPtr->getPointCloud(cloudDense, config.expectedHeight[1]);
-        // preset auto-trigger removed; BFS/FOV corridor is used exclusively
+        pcl::PointCloud<pcl::PointXYZ> cloudDense;
+        pcl::fromROSMsg(*msg, cloudDense);
+        if (cloudDense.empty())
+        {
+            ROS_WARN_THROTTLE(1.0, "Online map input is empty: %s", config.onlineMapTopic.c_str());
+            return;
+        }
+
+        Eigen::Vector3d bound_min_local, bound_max_local;
+        {
+            std::lock_guard<std::mutex> lk(bound_mutex_);
+            bound_min_local = bound_min;
+            bound_max_local = bound_max;
+        }
+
+        auto new_map = std::make_shared<GlobalMap>(config);
+        new_map->initialize(cloudDense, config.outlierThreshold, bound_min_local, bound_max_local);
+        std::atomic_store(&glbMapPtr, new_map);
+        mapInitialized.store(true);
+        last_online_map_update_ = now;
+        const uint64_t map_version = online_map_version_.fetch_add(1) + 1;
+
+        // 地图变化后，旧A*与走廊不再有效。下一次规划必须基于新地图重新计算。
+        {
+            std::lock_guard<std::mutex> lk(astar_cache_mutex_);
+            astar_cached_goal_valid_ = false;
+        }
+        std::atomic_store(&latest_astar_global_path_ptr_,
+                          std::shared_ptr<std::vector<Eigen::Vector3d>>());
+        std::atomic_store(&latest_astar_local_path_ptr_,
+                          std::shared_ptr<std::vector<Eigen::Vector3d>>());
+        std::atomic_store(&latest_corridor_ptr_,
+                          std::make_shared<std::vector<Eigen::Matrix<double, 6, -1>>>());
+        corridor_ready_.store(false);
+        resetAstarProgress();
+
+        pubMap(cloudDense, 0.0);
+        ROS_INFO_THROTTLE(2.0, "Online map updated: version=%lu points=%zu",
+                          static_cast<unsigned long>(map_version), cloudDense.size());
+
+        if (has_active_goal_.load() && odomInitialized.load() &&
+            !isExecutingCollisionTrajectoryNow() &&
+            (last_online_replan_.isZero() ||
+             (now - last_online_replan_).toSec() >= std::max(0.0, config.onlineReplanPeriod)))
+        {
+            last_online_replan_ = now;
+            dispatchAsyncReplanOnce("online_map_update");
+        }
     }
 
     inline void pubMap(const pcl::PointCloud<pcl::PointXYZ> &cloudDense, double sleep_time = 2)
@@ -1314,14 +1398,19 @@ private:
         pcl::PointCloud<pcl::PointXYZ> infcloud;
 
         pcl::toROSMsg(cloudDense, cloudVisMsg);
-        glbMapPtr->getPointCloud(infcloud, config.expectedHeight[1]);
+        auto map_snapshot = std::atomic_load(&glbMapPtr);
+        if (!map_snapshot || !map_snapshot->ogmPtr)
+            return;
+        map_snapshot->getPointCloud(infcloud, config.expectedHeight[1]);
 
         pcl::toROSMsg(infcloud, cloudMsg);
 
         cloudVisMsg.header.frame_id = "world";
         cloudMsg.header.frame_id = "world";
-        ros::Rate sleep_rate(1 / sleep_time);
-        sleep_rate.sleep();
+        if (sleep_time > 0.0)
+        {
+            ros::Duration(sleep_time).sleep();
+        }
         std::cout << "count = " << cloudDense.size() << " | " << infcloud.size() << std::endl;
         mapPub.publish(cloudMsg);
         visMapPub.publish(cloudVisMsg);
@@ -2456,6 +2545,7 @@ private:
             std::lock_guard<std::mutex> lk(status_mutex_);
             latest_goal_ = target;
         }
+        has_active_goal_.store(true);
 
         // New goal resets collision-candidate latch.
         collision_candidate_active_.store(false);
@@ -2477,6 +2567,7 @@ private:
     void getCorridorFromSetPos(quadrotor_msgs::TrajectoryPlan &plan_msg, const Eigen::Matrix3Xd & /*key_pos*/)
     {
         (void)plan_msg;
+        const uint64_t planning_map_version = online_map_version_.load();
 
         if (!ensureGlobalAstarPathAndFullCorridorBuilt())
         {
@@ -2561,7 +2652,9 @@ private:
         const bool do_special_initial = (special_stage == SpecialSceneReplanStage::AwaitInitialCollisionPlan);
         const bool do_special_final =
             (special_stage == SpecialSceneReplanStage::AwaitFinalAvoidance) || collision_event_trigger_.load();
-        if (!do_special_initial && !do_special_final)
+        const bool do_online_refresh =
+            !config.useLoadPCDFile && has_active_goal_.load() && !isExecutingCollisionTrajectoryNow();
+        if (!do_special_initial && !do_special_final && !do_online_refresh)
         {
             return;
         }
@@ -2616,7 +2709,8 @@ private:
 
             const Eigen::Vector3d n = selected_collision_plane_normal_;
             const double DR = this->config.dilateRadius;
-            const double GR = (glbMapPtr && glbMapPtr->ogmPtr) ? glbMapPtr->getScale() : this->config.gridResolution;
+            auto map_snapshot = std::atomic_load(&glbMapPtr);
+            const double GR = (map_snapshot && map_snapshot->ogmPtr) ? map_snapshot->getScale() : this->config.gridResolution;
             const int r = static_cast<int>(std::ceil(DR / GR));
             const double D = r * GR;
             const double O = 0.5 * GR;
@@ -2663,8 +2757,34 @@ private:
             executing_collision_traj_.store(false);
             collision_exec_until_sec_.store(0.0);
             special_scene_stage_.store(static_cast<int>(SpecialSceneReplanStage::Completed));
-            ROS_WARN("Special scene stage-2: publishing final A* waypoint plan to global goal with %zu waypoints",
+            ROS_WARN("Publishing online/final A* waypoint plan to global goal with %zu waypoints",
                      forward_plan.waypoints.size());
+        }
+
+        if (!config.useLoadPCDFile && planning_map_version != online_map_version_.load())
+        {
+            // A newer map arrived while A*/corridor/trajectory generation was running.
+            // Do not publish that stale trajectory; the queued worker pass will rebuild it.
+            {
+                std::lock_guard<std::mutex> lk(astar_cache_mutex_);
+                astar_cached_goal_valid_ = false;
+            }
+            std::atomic_store(&latest_astar_global_path_ptr_,
+                              std::shared_ptr<std::vector<Eigen::Vector3d>>());
+            std::atomic_store(&latest_astar_local_path_ptr_,
+                              std::shared_ptr<std::vector<Eigen::Vector3d>>());
+            std::atomic_store(&latest_corridor_ptr_,
+                              std::make_shared<std::vector<Eigen::Matrix<double, 6, -1>>>());
+            corridor_ready_.store(false);
+            collision_candidate_active_.store(false);
+            executing_collision_traj_.store(false);
+            collision_exec_until_sec_.store(0.0);
+            special_scene_stage_.store(static_cast<int>(special_stage));
+            if (do_special_initial)
+                suppress_time_replan_until_sec_.store(0.0);
+            replan_requested_.store(true);
+            ROS_WARN("Online map changed during planning; dropping stale trajectory and rebuilding");
+            return;
         }
 
         keyPosPub.publish(forward_plan);
@@ -2693,7 +2813,8 @@ private:
     {
         best_steps = -1;
         (void)odom_local;
-        if (!mapInitialized.load() || !glbMapPtr || !glbMapPtr->ogmPtr)
+        auto map_snapshot = std::atomic_load(&glbMapPtr);
+        if (!mapInitialized.load() || !map_snapshot || !map_snapshot->ogmPtr)
         {
             return false;
         }
@@ -2715,7 +2836,7 @@ private:
             return false;
         }
 
-        auto ogm = glbMapPtr->ogmPtr;
+        auto ogm = map_snapshot->ogmPtr;
         const double cellS = bfs_ptr->cellS > 0.0 ? bfs_ptr->cellS : ogm->getScale();
         const int zIdx = bfs_ptr->zIdx;
 
@@ -2900,9 +3021,10 @@ private:
 
         // Cell size for translating meters -> steps (keeps logs/field consistent with BFS naming).
         double cellS = this->config.gridResolution;
-        if (glbMapPtr && glbMapPtr->ogmPtr)
+        auto map_snapshot = std::atomic_load(&glbMapPtr);
+        if (map_snapshot && map_snapshot->ogmPtr)
         {
-            const double s = glbMapPtr->ogmPtr->getScale();
+            const double s = map_snapshot->ogmPtr->getScale();
             if (s > 1e-9) cellS = s;
         }
         if (cellS <= 1e-9) cellS = 0.2;
@@ -3340,9 +3462,10 @@ private:
             {
                 // Additional filter: check semicircle area in front of vehicle for obstacles
                 bool semicircle_has_obstacle = false;
-                if (glbMapPtr && glbMapPtr->ogmPtr)
+                auto map_snapshot = std::atomic_load(&glbMapPtr);
+                if (map_snapshot && map_snapshot->ogmPtr)
                 {
-                    auto ogm = glbMapPtr->ogmPtr;
+                    auto ogm = map_snapshot->ogmPtr;
                     double cellS = ogm->getScale();
                     if (cellS <= 1e-9) cellS = this->config.gridResolution > 1e-9 ? this->config.gridResolution : 0.2;
 
@@ -3706,7 +3829,14 @@ private:
         cubeMesh.row(2) = unitCubeMesh.col(2).transpose().array() * (bound(5) - bound(4)) + bound(4);
 
         localSurface.clear();
-        glbMapPtr->ogmPtr->getSurfacePointsInBox(glbMapPtr->ogmPtr->convertPosD2I(origin), halfWi, localSurface);
+        auto map_snapshot = std::atomic_load(&glbMapPtr);
+        if (!map_snapshot || !map_snapshot->ogmPtr)
+        {
+            ROS_WARN_THROTTLE(1.0, "Cannot generate corridor: online map is not ready");
+            return false;
+        }
+        map_snapshot->ogmPtr->getSurfacePointsInBox(
+            map_snapshot->ogmPtr->convertPosD2I(origin), halfWi, localSurface);
 
         std::vector<double> localSurface2;
         localSurface2.reserve(localSurface.size());

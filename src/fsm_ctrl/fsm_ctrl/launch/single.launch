@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+
+<launch>
+    <arg name="start_mavros" default="true"/>
+    <arg name="fcu_url" default="/dev/ttyACM0:921600"/>
+
+    <include if="$(arg start_mavros)" file="$(find mavros)/launch/px4.launch">
+        <arg name="fcu_url" value="$(arg fcu_url)"/>
+    </include>
+
+    <node pkg="fsm_ctrl" type="single_offboard_fsm" name="single_offboard_fsm" output="screen">
+        <param name="nmpc_Qposx" type="double" value="50.0"/>
+        <param name="nmpc_Qposy" type="double" value="50.0"/>
+        <param name="nmpc_Qposz" type="double" value="80.0"/>
+        <param name="nmpc_Qvelx" type="double" value="4.0"/>
+        <param name="nmpc_Qvely" type="double" value="4.0"/>
+        <param name="nmpc_Qvelz" type="double" value="3.0"/>
+        <param name="nmpc_Qquatx" type="double" value="1.0"/>
+        <param name="nmpc_Qquaty" type="double" value="1.0"/>
+        <param name="nmpc_Qquatz" type="double" value="1.0"/>
+        <param name="nmpc_Rwx" type="double" value="0.9"/>
+        <param name="nmpc_Rwy" type="double" value="0.9"/>
+        <param name="nmpc_Rwz" type="double" value="0.5"/>
+        <param name="nmpc_RtotalF" type="double" value="0.1"/>
+        <param name="nmpc_hover_thrust" type="double" value="0.48"/>
+        <param name="planner_command_topic" value="/position_command"/>
+        <param name="planner_horizon_topic" value="/position_command_horizon"/>
+        <param name="nmpc_enable_xy_integral" type="bool" value="true"/>
+        <param name="nmpc_xy_integral_gain" type="double" value="0.08"/>
+        <param name="nmpc_xy_integral_limit" type="double" value="0.10"/>
+        <param name="nmpc_xy_integral_leak" type="double" value="0.01"/>
+        <param name="nmpc_xy_integral_max_error" type="double" value="0.30"/>
+    </node>
+</launch>

@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+
+<launch>
+	<arg name="lidar_odom_topic" default="/aft_mapped_to_init"/>
+	<arg name="selected_odom_topic" default="/visual_slam/odom"/>
+	<arg name="lidar_to_body_pitch_deg" default="-25.3"/>
+
+	<node pkg="fsm_ctrl" type="px4_estimator" name="px4_estimator" output="screen">
+
+		<!-- MID360 is pitched downward relative to the FCU body frame. -->
+		<param name="lidar_to_body_pitch_deg" value="$(arg lidar_to_body_pitch_deg)" type="double"/>
+		
+		<remap from="~lidar_odom" to="$(arg lidar_odom_topic)"/>
+		<remap from="~odom_out" to="$(arg selected_odom_topic)"/>
+	
+	</node>
+
+</launch>

@@ -15,11 +15,13 @@ find_package(catkin REQUIRED COMPONENTS
     std_msgs
     geometry_msgs
     nav_msgs
+    sensor_msgs
+    mavros_msgs
     tf
     eigen_conversions
     message_generation
     std_srvs
-    imu_mocap_fusion
+    quadrotor_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -133,7 +135,7 @@ include_directories(
 )
 
 add_executable(external_wrench_estimation_node src/external_wrench_estimation/node.cpp)
-add_dependencies(external_wrench_estimation_node ${${PROJECT_NAME}_EXPORTED_TARGETS})
+add_dependencies(external_wrench_estimation_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(external_wrench_estimation_node ${catkin_LIBRARIES} yaml-cpp -lpthread)
 
 #############

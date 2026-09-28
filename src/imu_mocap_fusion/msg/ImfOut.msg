@@ -1,6 +1,0 @@
-Header header
-
-geometry_msgs/Vector3 unbiased_linear_acceleration
-geometry_msgs/Vector3 unbiased_angular_velocity
-geometry_msgs/Quaternion attitude
-geometry_msgs/Vector3 velocity

@@ -1,0 +1,30 @@
+# Jiangyin NMPC默认参数；确认定位坐标轴后再在真机上调节。
+nmpc_Qposx: 50.0
+nmpc_Qposy: 50.0
+nmpc_Qposz: 80.0
+nmpc_Qvelx: 4.0
+nmpc_Qvely: 4.0
+nmpc_Qvelz: 3.0
+nmpc_Qquatx: 1.0
+nmpc_Qquaty: 1.0
+nmpc_Qquatz: 1.0
+nmpc_Rwx: 0.9
+nmpc_Rwy: 0.9
+nmpc_Rwz: 0.5
+nmpc_RtotalF: 0.1
+nmpc_hover_thrust: 0.48
+nmpc_gravity: 9.8015
+nmpc_hover_x: 0.0
+nmpc_hover_y: 0.0
+nmpc_hover_z: 0.5
+nmpc_hover_yaw: 0.0
+planner_command_topic: /position_command
+planner_horizon_topic: /position_command_horizon
+planner_command_timeout: 0.5
+
+# 与 Jiangyin/nmpc 相同的有界 XY 位置积分修正。
+nmpc_enable_xy_integral: true
+nmpc_xy_integral_gain: 0.08
+nmpc_xy_integral_limit: 0.10
+nmpc_xy_integral_leak: 0.01
+nmpc_xy_integral_max_error: 0.30
