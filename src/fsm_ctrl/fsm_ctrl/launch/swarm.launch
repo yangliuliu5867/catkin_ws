@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 完整实飞 launch 已经启动 px4_estimator，默认禁止重复启动。 -->
+  <arg name="start_estimator" default="false" />
+  <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
+  <arg name="lidar_to_body_pitch_deg" default="-25.3" />
+  <arg name="udp_ip" default="127.0.0.1" />
+  <arg name="udp_port" default="12001" />
+
+  <include if="$(arg start_estimator)" file="$(find fsm_ctrl)/launch/px4_estimator.launch">
+    <arg name="lidar_odom_topic" value="$(arg lidar_odom_topic)" />
+    <arg name="lidar_to_body_pitch_deg" value="$(arg lidar_to_body_pitch_deg)" />
+  </include>
+
+  <node pkg="fsm_ctrl" type="swarm_user_cmd" name="swarm_user_cmd" output="screen">
+    <param name="lidar_odom_topic" value="$(arg lidar_odom_topic)" />
+    <param name="udp_ip" value="$(arg udp_ip)" />
+    <param name="udp_port" value="$(arg udp_port)" />
+    <param name="pose_info_rate" value="5.0" />
+  </node>
+</launch>

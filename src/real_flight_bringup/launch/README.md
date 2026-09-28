@@ -65,6 +65,36 @@ roslaunch real_flight_bringup controller_stability_test.launch \
 轨迹桥接器同时保留 `/position_command` 并发布 `/position_command_horizon`，NMPC优先使用
 后者的9点真实预测窗口。默认不会在碰撞后切换成定点悬停等待重规划。
 
+### Jiangyin交互终端与RViz目标点
+
+完整系统启动后，另开一个终端运行原Jiangyin使用习惯的交互界面：
+
+```bash
+source ~/catkin_ws/devel/setup.bash
+roslaunch fsm_ctrl swarm.launch
+```
+
+该终端实时显示Point-LIO原始定位、送入PX4的视觉位姿、PX4 Local Position、
+MAVROS连接/解锁/模式以及状态机当前命令，并通过原UDP 12001接口发送cmd。
+完整系统已经启动`px4_estimator`，因此不要给`swarm.launch`传
+`start_estimator:=true`。
+
+RViz中使用“2D Nav Goal”可点击目标XY。`rviz_goal_bridge`会补上目标高度并转发到
+规划器的`/goal`。交互选点启动方式：
+
+```bash
+roslaunch real_flight_bringup real_flight_step1.launch \
+  enable_goal_publish:=false rviz_goal_z:=1.0
+```
+
+必须关闭`enable_goal_publish`，否则`mission.yaml`里的`SetPos`仍会自动发布。RViz应同时显示：
+
+- `/path`：实际定位轨迹；
+- `/visualizer/route`：规划路线；
+- `/visualizer/trajectory`：最终可执行轨迹；
+- `/visualizer/waypoints`：轨迹关键点；
+- `/visualizer/mesh`和`/visualizer/edge`：安全走廊。
+
 ```bash
 roslaunch real_flight_bringup real_flight_step1.launch \
   lidar_odom_topic:=/aft_mapped_to_init
@@ -78,6 +108,8 @@ roslaunch real_flight_bringup real_flight_step1.launch \
 常用参数：
 
 - `enable_goal_publish:=true`：自动发送 `mission.yaml` 中的目标点；
+- `enable_rviz_goal:=true`：接收RViz的`/move_base_simple/goal`并转发给规划器；
+- `rviz_goal_z:=1.0`：RViz点击目标使用的固定高度；
 - `point_cloud_use_pcd:=false`：默认在线地图；改成 `true` 可回到原静态 PCD；
 - `online_map_topic:=/rm_node/rog_map/occ`：在线原始占据点云；
 - `online_map_update_period:=0.5`：重建规划占据栅格的最小间隔，单位秒；

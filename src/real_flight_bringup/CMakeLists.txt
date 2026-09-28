@@ -37,6 +37,7 @@ catkin_install_python(PROGRAMS
   scripts/replay_position_command.py
   scripts/generate_static_map.py
   scripts/thrust_calibrate_nmpc.py
+  scripts/rviz_goal_bridge.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

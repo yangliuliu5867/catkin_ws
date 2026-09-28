@@ -69,3 +69,14 @@ add_executable(px4_estimator
 target_link_libraries(px4_estimator
   ${catkin_LIBRARIES}
 )
+
+add_executable(swarm_user_cmd
+  src/swarm_user_cmd.cpp
+)
+target_link_libraries(swarm_user_cmd
+  ${catkin_LIBRARIES}
+)
+add_dependencies(swarm_user_cmd
+  ${${PROJECT_NAME}_EXPORTED_TARGETS}
+  ${catkin_EXPORTED_TARGETS}
+)

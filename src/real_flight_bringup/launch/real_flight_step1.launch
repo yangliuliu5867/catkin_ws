@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <launch>
     <arg name="enable_goal_publish" default="true" />
+    <arg name="enable_rviz_goal" default="true" />
+    <arg name="rviz_goal_z" default="1.0" />
     <arg name="enable_nmpc" default="true" />
     <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
     <arg name="lidar_to_body_pitch_deg" default="-25.3" />
@@ -117,6 +119,15 @@
         <param name="pre_align_att_tolerance" value="0.20" />
         <param name="pre_align_blind_publish_sec" value="1.0e9" />
         <param name="odom_wait_timeout_sec" value="$(arg pre_align_timeout_sec)" />
+    </node>
+
+    <!-- RViz 的 2D Nav Goal 没有高度；转换后发布给在线规划器 /goal。 -->
+    <node if="$(arg enable_rviz_goal)" pkg="real_flight_bringup" type="rviz_goal_bridge.py"
+          name="rviz_goal_bridge" output="screen">
+        <param name="input_topic" value="/move_base_simple/goal" />
+        <param name="output_topic" value="/goal" />
+        <param name="goal_z" value="$(arg rviz_goal_z)" />
+        <param name="frame_id" value="world" />
     </node>
 
     <!-- Primary low-level controller: Jiangyin FSM + NMPC. cmd5 tracks /position_command. -->
