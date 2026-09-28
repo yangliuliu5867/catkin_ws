@@ -87,11 +87,13 @@ roslaunch real_flight_bringup real_flight_step1.launch \
   enable_goal_publish:=false rviz_goal_z:=1.0
 ```
 
-必须关闭`enable_goal_publish`，否则`mission.yaml`里的`SetPos`仍会自动发布。RViz应同时显示：
+必须关闭`enable_goal_publish`，否则`mission.yaml`里的`SetPos`仍会自动发布。规划器可视化分为三层：
 
-- `/path`：实际定位轨迹；
+- `/visualizer/candidate_trajectories`：扩散模型本轮生成的全部候选轨迹；青色为避障候选，橙色为主动碰撞候选；
+- `/visualizer/selected_candidate`：前端代价函数从候选中选出的轨迹（绿色粗线）；
+- `/visualizer/trajectory`：后端MINCO优化后真正发送给NMPC跟踪的参考轨迹；
+- `/path`：实际定位轨迹，仅用于和参考轨迹比较，不属于规划候选；
 - `/visualizer/route`：规划路线；
-- `/visualizer/trajectory`：最终可执行轨迹；
 - `/visualizer/waypoints`：轨迹关键点；
 - `/visualizer/mesh`和`/visualizer/edge`：安全走廊。
 
