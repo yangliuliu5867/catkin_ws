@@ -28,7 +28,6 @@
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
 
 #include <quadrotor_msgs/TrajectoryPlan.h>
 #include <quadrotor_msgs/CollisionTrajectory.h>
@@ -90,53 +89,15 @@ constexpr double SAMPLE_FORWARD_FIXED_DURATION_S = 4.0;
 // ===== Forward-sampling generators (templates) =====
 namespace sample_forward {
 
-// Publish the diffusion model's complete candidate set and the candidate selected
-// by the front-end scorer.  These markers describe planning decisions; they are
-// intentionally separate from the back-end optimized trajectory and vehicle path.
-inline void publishCandidateTrajectoryMarkers(
-	const std::vector<std::vector<Eigen::Vector3d>> &paths,
-	const std::vector<int> &modes,
-	const int selected_index)
+// Publish the trajectory selected by the front-end scorer. This planning decision
+// is intentionally separate from the back-end optimized trajectory and vehicle path.
+inline void publishSelectedCandidateMarker(const std::vector<Eigen::Vector3d> &path)
 {
-	static ros::Publisher candidates_pub =
-		ros::NodeHandle().advertise<visualization_msgs::MarkerArray>(
-			"/visualizer/candidate_trajectories", 2, true);
 	static ros::Publisher selected_pub =
 		ros::NodeHandle().advertise<visualization_msgs::Marker>(
 			"/visualizer/selected_candidate", 2, true);
 
-	visualization_msgs::MarkerArray candidates_msg;
 	const ros::Time stamp = ros::Time::now();
-	for (size_t i = 0; i < paths.size(); ++i)
-	{
-		visualization_msgs::Marker marker;
-		marker.header.frame_id = "world";
-		marker.header.stamp = stamp;
-		marker.ns = "planner_candidates";
-		marker.id = static_cast<int>(i);
-		marker.type = visualization_msgs::Marker::LINE_STRIP;
-		marker.action = visualization_msgs::Marker::ADD;
-		marker.pose.orientation.w = 1.0;
-		marker.scale.x = 0.025;
-		const bool collision = i < modes.size() &&
-			modes[i] == quadrotor_msgs::TrajectoryPlan::MODE_COLLISION;
-		marker.color.r = collision ? 1.0 : 0.0;
-		marker.color.g = collision ? 0.45 : 0.75;
-		marker.color.b = collision ? 0.05 : 1.0;
-		marker.color.a = 0.32;
-		marker.points.reserve(paths[i].size());
-		for (const auto &p : paths[i])
-		{
-			geometry_msgs::Point point;
-			point.x = p.x();
-			point.y = p.y();
-			point.z = p.z();
-			marker.points.push_back(point);
-		}
-		candidates_msg.markers.push_back(marker);
-	}
-	candidates_pub.publish(candidates_msg);
-
 	visualization_msgs::Marker selected;
 	selected.header.frame_id = "world";
 	selected.header.stamp = stamp;
@@ -150,17 +111,14 @@ inline void publishCandidateTrajectoryMarkers(
 	selected.color.g = 1.0;
 	selected.color.b = 0.1;
 	selected.color.a = 1.0;
-	if (selected_index >= 0 && selected_index < static_cast<int>(paths.size()))
+	selected.points.reserve(path.size());
+	for (const auto &p : path)
 	{
-		selected.points.reserve(paths[static_cast<size_t>(selected_index)].size());
-		for (const auto &p : paths[static_cast<size_t>(selected_index)])
-		{
-			geometry_msgs::Point point;
-			point.x = p.x();
-			point.y = p.y();
-			point.z = p.z();
-			selected.points.push_back(point);
-		}
+		geometry_msgs::Point point;
+		point.x = p.x();
+		point.y = p.y();
+		point.z = p.z();
+		selected.points.push_back(point);
 	}
 	selected_pub.publish(selected);
 }
@@ -2090,17 +2048,13 @@ inline quadrotor_msgs::TrajectoryPlan generateAvoidanceTrajectory(
 
 	if (X_vis.rows() > 0 && X_vis.cols() == N && Y_vis.rows() == X_vis.rows() && Y_vis.cols() == N)
 	{
-		std::vector<std::vector<Eigen::Vector3d>> candidate_paths(static_cast<size_t>(N));
-		std::vector<int> candidate_modes(static_cast<size_t>(N), quadrotor_msgs::TrajectoryPlan::MODE_COLLISION_FREE);
-		for (int i = 0; i < N; ++i)
-		{
-			candidate_paths[static_cast<size_t>(i)].reserve(static_cast<size_t>(X_vis.rows()));
-			const double z = candidates[static_cast<size_t>(i)].waypoints.empty()
-				? p0.z() : candidates[static_cast<size_t>(i)].waypoints.front().z;
-			for (int m = 0; m < X_vis.rows(); ++m)
-				candidate_paths[static_cast<size_t>(i)].emplace_back(X_vis(m, i), Y_vis(m, i), z);
-		}
-		publishCandidateTrajectoryMarkers(candidate_paths, candidate_modes, best_i);
+		std::vector<Eigen::Vector3d> selected_path;
+		selected_path.reserve(static_cast<size_t>(X_vis.rows()));
+		const double z = candidates[static_cast<size_t>(best_i)].waypoints.empty()
+			? p0.z() : candidates[static_cast<size_t>(best_i)].waypoints.front().z;
+		for (int m = 0; m < X_vis.rows(); ++m)
+			selected_path.emplace_back(X_vis(m, best_i), Y_vis(m, best_i), z);
+		publishSelectedCandidateMarker(selected_path);
 	}
 
 	// IMPORTANT: candidates are BSPLINE ctrl plans for scoring. Convert only the final selected plan
@@ -3277,31 +3231,25 @@ inline quadrotor_msgs::TrajectoryPlan generateMixedTrajectory(
 			best_i = static_cast<int>(idx);
 		}
 
-		// Visualize exactly the samples used by the scorer: all diffusion candidates
-		// plus the candidate selected for conversion and back-end optimization.
+		// Visualize exactly the selected samples used by the front-end scorer.
 		{
-			std::vector<std::vector<Eigen::Vector3d>> candidate_paths(static_cast<size_t>(kBatch));
-			std::vector<int> candidate_modes(static_cast<size_t>(kBatch), quadrotor_msgs::TrajectoryPlan::MODE_COLLISION_FREE);
+			std::vector<Eigen::Vector3d> selected_path;
 			const double z_vis = p0.z();
-			for (int ai = 0; ai < kAvoidN; ++ai)
+			selected_path.reserve(static_cast<size_t>(M));
+			if (best_i < kAvoidN)
 			{
-				auto &path = candidate_paths[static_cast<size_t>(ai)];
-				path.reserve(static_cast<size_t>(M));
 				for (int m = 0; m < M; ++m)
-					path.emplace_back(X_avoid(m, ai), Y_avoid(m, ai), z_vis);
+					selected_path.emplace_back(X_avoid(m, best_i), Y_avoid(m, best_i), z_vis);
 			}
-			for (int ci = 0; ci < kCollN; ++ci)
+			else
 			{
-				const int bi = kAvoidN + ci;
-				auto &path = candidate_paths[static_cast<size_t>(bi)];
-				path.reserve(static_cast<size_t>(Mpre_dbg + Mpost_dbg));
-				candidate_modes[static_cast<size_t>(bi)] = quadrotor_msgs::TrajectoryPlan::MODE_COLLISION;
+				const int ci = best_i - kAvoidN;
 				for (int m = 0; m < Mpre_dbg; ++m)
-					path.emplace_back(Xpre_dbg(m, ci), Ypre_dbg(m, ci), z_vis);
+					selected_path.emplace_back(Xpre_dbg(m, ci), Ypre_dbg(m, ci), z_vis);
 				for (int m = 0; m < Mpost_dbg; ++m)
-					path.emplace_back(Xpost_dbg(m, ci), Ypost_dbg(m, ci), z_vis);
+					selected_path.emplace_back(Xpost_dbg(m, ci), Ypost_dbg(m, ci), z_vis);
 			}
-			publishCandidateTrajectoryMarkers(candidate_paths, candidate_modes, best_i);
+			publishSelectedCandidateMarker(selected_path);
 		}
 
 		// If collision plan selected, optionally return CollisionTrajectory metadata.
