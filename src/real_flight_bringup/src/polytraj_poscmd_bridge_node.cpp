@@ -250,18 +250,36 @@ private:
     }
 
     void startTriggerCallback(const geometry_msgs::PoseStamped::ConstPtr &msg) {
-        tracking_enabled_ = (msg->header.frame_id == "start");
-        if (tracking_enabled_) {
+        const bool enable = (msg->header.frame_id == "start");
+        if (enable == tracking_enabled_) {
+            return;
+        }
+        tracking_enabled_ = enable;
+        ext_force_high_ = false;
+        force_collision_hold_active_ = false;
+        waiting_post_collision_traj_ = false;
+        if (enable) {
+            // A trajectory can be planned during cmd3. Start it from its beginning
+            // when cmd5 arrives, rather than using elapsed planning/hover time.
+            traj_start_time_ = has_traj_
+                ? ros::Time::now() + ros::Duration(traj_start_delay_)
+                : ros::TIME_MAX;
             if (has_odom_) {
                 hold_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
             } else {
                 hold_yaw_ = yawFromQuaternion(msg->pose.orientation);
             }
+            ROS_INFO("[polytraj_poscmd_bridge] Tracking enabled; %s",
+                     has_traj_ ? "start buffered trajectory from t=0" : "waiting for trajectory");
+        } else {
+            traj_start_time_ = ros::TIME_MAX;
+            ROS_INFO("[polytraj_poscmd_bridge] Tracking stopped");
         }
     }
 
     void extForceCallback(const geometry_msgs::Vector3Stamped::ConstPtr &msg) {
-        if (!use_external_force_collision_hold_) {
+        if (!use_external_force_collision_hold_ || !tracking_enabled_ || !has_traj_ ||
+            ros::Time::now() < traj_start_time_) {
             return;
         }
 

@@ -106,6 +106,13 @@ roslaunch real_flight_bringup real_flight_step1.launch \
 `/planner/inflated_map`，避免和输入话题形成回环。它仍需要 CUDA、TensorRT 和
 `mpd_splines` 的三个 engine 文件。
 
+轨迹执行使用 `fsm_ctrl` 的 `cmd 5`：进入 `cmd 5` 时，状态机向
+`/traj_start_trigger` 发布 `start`，采样桥开始发布 `/position_command` 和
+`/position_command_horizon`。如果轨迹已在 `cmd 3` 悬停期间生成，进入 `cmd 5`
+后从该轨迹的起点计时；如果尚未生成，则保持当前位置，等待正式轨迹。
+退出 `cmd 5`（例如切回 `cmd 3` 或输入 `cmd 4`）时发布 `stop`，采样桥停止跟踪指令。
+不需要再手动发布启动触发。执行前应在 RViz 核对选中轨迹及撞击位置。
+
 常用参数：
 
 - `enable_goal_publish:=true`：自动发送 `mission.yaml` 中的目标点；

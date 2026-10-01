@@ -2584,8 +2584,6 @@ private:
         geometry_msgs::Vector3 pred_vel;
         geometry_msgs::Vector3 pred_acc;
         Eigen::Vector3d goal_local;
-        Eigen::Vector3d current_traj_goal_local = Eigen::Vector3d::Zero();
-        double remaining_time_local = 0.0;
         {
             std::lock(odom_mutex_, bound_mutex_, status_mutex_);
             std::lock_guard<std::mutex> lk1(odom_mutex_, std::adopt_lock);
@@ -2598,8 +2596,6 @@ private:
             pred_vel = latest_pred_vel;
             pred_acc = latest_pred_acc;
             goal_local = latest_goal_;
-            remaining_time_local = latest_remaining_time;
-            current_traj_goal_local = current_traj_goal_;
         }
 
         auto global_ptr = std::atomic_load(&latest_astar_global_path_ptr_);

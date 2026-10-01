@@ -217,6 +217,8 @@ int main(int argc, char **argv)
         node.advertise<quadrotor_msgs::Px4ctrlDebug>("/debugPx4ctrl", 10);
     const ros::Publisher command_state_publisher =
         node.advertise<std_msgs::Int32>("/fsm_ctrl/command", 10, true);
+    const ros::Publisher planner_start_trigger_publisher =
+        node.advertise<geometry_msgs::PoseStamped>("/traj_start_trigger", 1, true);
 
     const ros::Subscriber state_subscriber =
         node.subscribe<mavros_msgs::State>(
@@ -668,6 +670,25 @@ int main(int argc, char **argv)
             if (active_command == 5)
             {
                 planner_fallback_hold = local_position;
+                // A reference from the previous tracking session must not be reused
+                // while the bridge processes the new start trigger.
+                has_planner_command = false;
+                has_planner_horizon = false;
+            }
+            if (active_command == 5 || previous_command == 5)
+            {
+                geometry_msgs::PoseStamped trigger;
+                trigger.header.stamp = ros::Time::now();
+                trigger.header.frame_id = active_command == 5 ? "start" : "stop";
+                trigger.pose = position_setpoint.pose;
+                trigger.pose.position.x = local_position.x();
+                trigger.pose.position.y = local_position.y();
+                trigger.pose.position.z = local_position.z();
+                trigger.pose.orientation.w = local_attitude.w();
+                trigger.pose.orientation.x = local_attitude.x();
+                trigger.pose.orientation.y = local_attitude.y();
+                trigger.pose.orientation.z = local_attitude.z();
+                planner_start_trigger_publisher.publish(trigger);
             }
             ROS_INFO("FSM command changed: %d -> %d", previous_command, active_command);
             previous_command = active_command;
