@@ -29,9 +29,10 @@ collision_transition_duration: 0.15
 planned_collision_hold_sec: 0.15
 
 # 外力触发的定点保持是备用保护模式，不是主动碰撞实验的默认执行方式：
-# - |F_ext| 超过阈值：保持当前位置、速度清零，并保持当前高度和航向；
-# - |F_ext| 降到阈值以下：继续保持，直到收到新的碰撞后轨迹。
+# - 水平外力 sqrt(Fx^2 + Fy^2) 超过阈值：保持当前位置、速度清零，并保持当前高度和航向；
+# - 水平外力降到阈值以下：继续保持，直到收到新的碰撞后轨迹。
 use_external_force_collision_hold: false
+# 世界坐标系水平外力碰撞阈值，单位 N。
 external_force_collision_threshold: 4.0
 
 hold_final_position: true

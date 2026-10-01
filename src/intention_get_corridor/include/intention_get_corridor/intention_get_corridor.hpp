@@ -1463,8 +1463,10 @@ private:
             return;
         }
 
-        double force_mag = Eigen::Vector3d(msg->vector.x, msg->vector.y, msg->vector.z).norm();
-        bool current_force_high = (force_mag > collision_external_force_threshold_);
+        // Active collisions are against vertical surfaces.  Ignore the Z component
+        // so the steady gravity/thrust residual is not treated as a collision.
+        const double horizontal_force_mag = std::hypot(msg->vector.x, msg->vector.y);
+        bool current_force_high = (horizontal_force_mag > collision_external_force_threshold_);
         
         if (current_force_high)
         {

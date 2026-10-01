@@ -2,6 +2,7 @@
 <launch>
   <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
   <arg name="selected_odom_topic" default="/visual_slam/odom" />
+  <arg name="mavros_velocity_topic" default="/mavros/local_position/velocity_local" />
   <arg name="lidar_to_body_pitch_deg" default="-25.3" />
 
   <!-- Point-LIO is the only localization source. -->
@@ -16,6 +17,7 @@
         name="lidar_imu_state_bridge" output="screen">
     <param name="odom_topic" value="$(arg selected_odom_topic)" />
     <param name="imu_topic" value="/mavros/imu/data" />
+    <param name="velocity_topic" value="$(arg mavros_velocity_topic)" />
     <param name="output_topic" value="/estimator/state" />
   </node>
 </launch>

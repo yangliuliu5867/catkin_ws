@@ -31,6 +31,7 @@ CollisionModel:
   friction: 0.65
   damping_ratio: 0.10
   max_collision_velocity: 2.0
+  # 世界坐标系水平外力 sqrt(Fx^2 + Fy^2) 的碰撞阈值，单位 N。
   collision_force_threshold: 4.0
   collision_cooldown_sec: 1.0
 

@@ -265,9 +265,11 @@ private:
             return;
         }
 
-        const Eigen::Vector3d f(msg->vector.x, msg->vector.y, msg->vector.z);
-        const double force_norm = f.norm();
-        const bool force_high = force_norm > external_force_collision_threshold_;
+        // The experiment collides with vertical walls.  Use only the world-frame
+        // horizontal force so gravity/thrust residuals on Z cannot trigger a collision.
+        const double horizontal_force_norm =
+            std::hypot(msg->vector.x, msg->vector.y);
+        const bool force_high = horizontal_force_norm > external_force_collision_threshold_;
 
         if (force_high && !ext_force_high_) {
             ext_force_high_ = true;
@@ -281,14 +283,14 @@ private:
             } else {
                 collision_hold_position_.setZero();
             }
-            ROS_WARN("[polytraj_poscmd_bridge] External force %.3fN > %.3fN, enter collision hold",
-                     force_norm, external_force_collision_threshold_);
+            ROS_WARN("[polytraj_poscmd_bridge] Horizontal external force %.3fN > %.3fN, enter collision hold",
+                     horizontal_force_norm, external_force_collision_threshold_);
         } else if (!force_high && ext_force_high_) {
             ext_force_high_ = false;
             if (force_collision_hold_active_) {
                 waiting_post_collision_traj_ = true;
-                ROS_INFO("[polytraj_poscmd_bridge] External force %.3fN < %.3fN, keep hold and wait for post-collision trajectory",
-                         force_norm, external_force_collision_threshold_);
+                ROS_INFO("[polytraj_poscmd_bridge] Horizontal external force %.3fN < %.3fN, keep hold and wait for post-collision trajectory",
+                         horizontal_force_norm, external_force_collision_threshold_);
             }
         }
     }

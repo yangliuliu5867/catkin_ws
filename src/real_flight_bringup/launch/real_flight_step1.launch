@@ -21,7 +21,7 @@
     <arg name="use_external_force_collision_hold" default="false" />
     <arg name="use_time_based_collision_end_trigger" default="false" />
     <arg name="enable_pre_align" default="true" />
-    <arg name="pre_align_altitude" default="1.00" />
+    <arg name="pre_align_altitude" default="0.50" />
     <arg name="offboard_wait_timeout_sec" default="0.0" />
     <arg name="pre_align_timeout_sec" default="20.0" />
     <arg name="pre_align_cmd_topic" default="/position_command" />
