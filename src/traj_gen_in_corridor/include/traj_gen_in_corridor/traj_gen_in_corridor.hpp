@@ -1,3 +1,4 @@
+#include "traj_gen_in_corridor/contact_corridor.hpp"
 #ifndef TRAJ_GEN_IN_CORRIDOR_HPP
 #define TRAJ_GEN_IN_CORRIDOR_HPP
 
@@ -95,9 +96,10 @@ private:
     std::atomic<bool> corridorInitialized{false};
     std::atomic<bool> odomInitialized{false};
     std::atomic<bool> targetInitialized{false};
-    // priority targets: key_pos (from TrajectoryPlan) preferred over /goal
+    // 普通模式保留 key_pos 优先级；碰撞模式必须使用显式 /goal。
     std::atomic<bool> has_keypos_{false};
     std::atomic<bool> has_goal_{false};
+    std::atomic<bool> has_explicit_goal_{false};
     ros::Time last_keypos_time_;
     ros::Time last_goal_time_;
     Eigen::Vector3d keypos_target_;
@@ -121,7 +123,6 @@ private:
     quadrotor_msgs::PolynomialTrajectory trajMsg;
 
     std::vector<Eigen::Matrix<double, 6, -1>> corridor;
-    std::vector<Eigen::Matrix<double, 6, -1>> corridor_inflated; // used for optimization (inflated)
     Eigen::VectorXd sample_times;
 
     // Latest received pre-collision (TrajectoryPlan) waypoints + segment times (front-end initial guess)
@@ -147,33 +148,6 @@ private:
     double last_a_obs_ = 0.0;
     // 保存上次可行性检查时的走廊 RMS 违例（米）
     double last_rms_violation_ = 0.0;
-
-    static inline void inflateCorridorPolyHInPlace(
-        std::vector<Eigen::Matrix<double, 6, -1>> &corrs,
-        const double inflate_m)
-    {
-        if (inflate_m <= 0.0)
-        {
-            return;
-        }
-
-        for (auto &poly : corrs)
-        {
-            for (int i = 0; i < poly.cols(); ++i)
-            {
-                const Eigen::Vector3d n = poly.col(i).head<3>();
-                const double nrm = n.norm();
-                if (!std::isfinite(nrm) || nrm < 1e-9)
-                {
-                    continue;
-                }
-                Eigen::Vector3d p0 = poly.col(i).tail<3>();
-                p0 += (n / nrm) * inflate_m;
-                poly.col(i).tail<3>() = p0;
-            }
-        }
-    }
-
 
     static inline bool isPointInCorridorPolyH(
         const Eigen::Matrix<double, 6, -1> &corridor_poly,
@@ -303,6 +277,13 @@ public:
             return;
         }
 
+        // 碰撞前端的路径以接触点结束，不能覆盖任务终点。
+        // 非碰撞路径也不能覆盖已收到的显式 /goal。
+        if (msg->trajectory_mode == quadrotor_msgs::TrajectoryPlan::MODE_COLLISION || has_explicit_goal_.load())
+        {
+            return;
+        }
+
         const auto &goal_wp = msg->waypoints.back();
         finalPos(0) = goal_wp.x;
         finalPos(1) = goal_wp.y;
@@ -382,10 +363,7 @@ public:
 
         sample_times_available.store(expected_segments > 0);
 
-        // Only set finalPos from the received TrajectoryPlan when we are NOT
-        // in collision mode waiting for a CollisionTrajectory. If we are
-        // waiting for CollisionTrajectory, that message will provide the
-        // authoritative post-collision endpoint.
+        // 碰撞模式的 key_pos 也以接触点结束；任务终点只能来自显式 /goal。
         if (!(use_collision_optimization.load() && waiting_for_collision_data_.load())) {
             const auto &last_wp = msg->waypoints.back();
             finalPos(0) = last_wp.x;
@@ -394,8 +372,17 @@ public:
             // Record as key_pos target (higher priority)
             keypos_target_ = Eigen::Vector3d(finalPos(0), finalPos(1), finalPos(2));
             has_keypos_.store(true);
+            targetInitialized.store(true);
         } else {
-            ROS_INFO("keyPosArrayCallback: collision mode active and waiting for CollisionTrajectory; deferring finalPos update");
+            has_keypos_.store(false);
+            if (has_explicit_goal_.load()) {
+                finalPos = goal_target_;
+                targetInitialized.store(true);
+                ROS_INFO("keyPosArrayCallback: collision mode keeps /goal as mission target");
+            } else {
+                targetInitialized.store(false);
+                ROS_WARN("keyPosArrayCallback: collision mode waiting for explicit /goal mission target");
+            }
         }
         // Prefer the sent header timestamp when available so we can anchor incoming
         // CollisionTrajectory messages to this key_pos update.
@@ -404,9 +391,10 @@ public:
         } else {
             last_keypos_time_ = ros::Time::now();
         }
-        targetInitialized.store(true);
-        ROS_INFO("Target initialized from TrajectoryPlan (key_pos): (%.3f, %.3f, %.3f)", 
-             finalPos(0), finalPos(1), finalPos(2));
+        if (targetInitialized.load()) {
+            ROS_INFO("Mission target for TrajectoryPlan: (%.3f, %.3f, %.3f)",
+                     finalPos(0), finalPos(1), finalPos(2));
+        }
 
         // Build combined segment times: pre (from msg->segment_times) + post (from latest_collision_post_segment_times_)
         std::vector<double> combined_times;
@@ -448,11 +436,7 @@ public:
             // Limit number of corridors to keep for optimizer (conservative default)
             const size_t kMaxKeep = 10;
             if (filtered.size() > kMaxKeep) filtered.resize(kMaxKeep);
-
-            // Keep uninflated corridors for visualization, create inflated copy for optimization
             corridor = filtered;
-            corridor_inflated = filtered;
-            inflateCorridorPolyHInPlace(corridor_inflated, 0.2);
 
             traj_generator();
         }
@@ -485,9 +469,6 @@ public:
             }
             corridor.push_back(hP);
         }
-        // Keep uninflated corridors for visualization, create inflated copy for optimization
-        corridor_inflated = corridor;
-        inflateCorridorPolyHInPlace(corridor_inflated, 0.2);
         corridorInitialized.store(true);
 
         // 不自动触发优化：只设置状态，等待显式请求（例如前端发布 key_pos 或用户触发）
@@ -521,9 +502,6 @@ public:
                 corridor.push_back(hP);
             }
             fin.close();
-            // Keep uninflated corridors for visualization, create inflated copy for optimization
-            corridor_inflated = corridor;
-            inflateCorridorPolyHInPlace(corridor_inflated, 0.2);
             corridorInitialized.store(true);
         ros::Duration(2.0).sleep();
         traj_generator();
@@ -564,11 +542,18 @@ public:
         finalPos(0) = msg->pose.position.x;
         finalPos(1) = msg->pose.position.y;
         finalPos(2) = std::max(msg->pose.position.z, 0.5);
-        // record as /goal (lower priority than key_pos)
+        // 显式 /goal 是碰撞任务的唯一终点来源。
         goal_target_ = Eigen::Vector3d(finalPos(0), finalPos(1), finalPos(2));
         has_goal_.store(true);
+        has_explicit_goal_.store(true);
         last_goal_time_ = ros::Time::now();
         targetInitialized.store(true);
+        if (waiting_for_collision_data_.load() && has_collision_events_.load() &&
+            corridorInitialized.load()) {
+            waiting_for_collision_data_.store(false);
+            ROS_INFO("targetCallBack: /goal arrived after collision data; triggering trajectory generation");
+            traj_generator();
+        }
     }
 
     inline void genPolyTrajMsg(const Trajectory<TRAJ_ORDER> &traj,
@@ -757,127 +742,47 @@ public:
     // 快速可行性检查：稀疏采样轨迹，检查动力学和走廊约束（宽松阈值用于实时）
     inline bool isTrajectoryFeasible(const Trajectory<TRAJ_ORDER> &traj,
                                      double constraint_tol = 5e-3,
-                                     double vel_tol = 0.05,
-                                     double acc_tol = 0.5)
+                                     double vel_tol = 0.05, double acc_tol = 0.5,
+                                     const contact_corridor::Polys *allowed = nullptr)
     {
-        // 若无轨迹或为空，视为不可行
-        if (traj.getPieceNum() <= 0) return false;
-
-        double T = traj.getTotalDuration();
-        if (T <= 0.0) return false;
-
-        // 采样数：至少50点，按50Hz采样
-        int samples = std::max(50, (int)std::ceil(T * 50.0));
-        double v_obs = 0.0, a_obs = 0.0;
-        bool dynamics_failed = false;
-
+        const auto &bounds = allowed ? *allowed : corridor;
+        last_v_obs_ = last_a_obs_ = 0.0;
+        last_rms_violation_ = INFINITY;
+        const double T = traj.getTotalDuration();
+        if (traj.getPieceNum() <= 0 || !std::isfinite(T) || T <= 0.0 || bounds.empty()) return false;
+        const int samples = std::max(50, static_cast<int>(std::ceil(T * 50.0)));
+        double squared = 0.0, worst = 0.0;
+        double worst_t = 0.0;
+        Eigen::Vector3d worst_pos = Eigen::Vector3d::Zero();
         for (int i = 0; i <= samples; ++i) {
-            double t = T * (double(i) / double(samples));
-            Eigen::Vector3d pos = traj.getPos(t);
-            Eigen::Vector3d vel = traj.getVel(t);
-            Eigen::Vector3d acc = traj.getAcc(t);
-
-            // record observed maxima during this single sampling pass
-            v_obs = std::max(v_obs, vel.norm());
-            a_obs = std::max(a_obs, acc.norm());
-
-            // 动力学约束检查（仅记录失败，不提前返回，以确保收集完整的观测极值）
-            if (vel.norm() > config.maxVelRate + vel_tol) {
-                dynamics_failed = true;
-            }
-            if (acc.norm() > config.maxAccRate + acc_tol) {
-                dynamics_failed = true;
-            }
-
-            // 走廊约束检查（软约束实现）：
-            // 计算每个采样点相对于走廊的违反量（若点位于任一多面体内，viol=0），
-            // 累积 RMS 违例量并与阈值比较；同时保留硬阈值拒绝过大违例。
-            if (!corridor.empty()) {
-                double point_min_violation = std::numeric_limits<double>::infinity();
-                for (const auto &poly : corridor) {
-                    // 对当前多面体，计算该点相对于所有半空间的最大“越界量”
-                    double poly_violation = 0.0; // 0 表示在多面体内
-                    for (int j = 0; j < poly.cols(); ++j) {
-                        Eigen::Vector3d nor = poly.col(j).head<3>();
-                        Eigen::Vector3d pt = poly.col(j).tail<3>();
-                        double d = nor.dot(pt - pos); // >=0 表示满足该半空间
-                        double viol = 0.0;
-                        if (d < 0.0) viol = -d; // 负值表示越界，viol 是正的越界深度
-                        if (viol > poly_violation) poly_violation = viol;
-                        // small early exit: if poly_violation already exceeds some large hard limit, break
-                        if (poly_violation > 1.0) break;
-                    }
-                    if (poly_violation < point_min_violation) point_min_violation = poly_violation;
-                    if (point_min_violation <= 0.0) break; // 已经在某个多面体内，完全满足
-                }
-
-                // 记录违例量（点到最近多面体的越界深度，单位为米）
-                // 累积用于总体 RMS 判断；将在后续单独累积计算 RMS
+            const double t = T * i / samples;
+            const Eigen::Vector3d p = traj.getPos(t), v = traj.getVel(t), a = traj.getAcc(t);
+            if (!p.allFinite() || !v.allFinite() || !a.allFinite()) return false;
+            last_v_obs_ = std::max(last_v_obs_, v.norm());
+            last_a_obs_ = std::max(last_a_obs_, a.norm());
+            double violation = INFINITY;
+            for (const auto &poly : bounds) violation = std::min(violation, contact_corridor::violation(poly, p));
+            squared += violation * violation;
+            if (violation > worst) {
+                worst = violation;
+                worst_t = t;
+                worst_pos = p;
             }
         }
-        // 记录本次可行性检查时观测到的最大速度/加速度，供后续发布路径复用，避免重复采样
-        last_v_obs_ = v_obs;
-        last_a_obs_ = a_obs;
-        // 默认重置 RMS 记录（后续第二遍会更新为真实值）
-        last_rms_violation_ = 0.0;
-
-        // 第二遍：重新计算违例 RMS（单独累积以便判定）
-        double violation_accum_sq = 0.0;
-        int violation_count = 0;
-
-        for (int i = 0; i <= samples; ++i) {
-            double t = T * (double(i) / double(samples));
-            Eigen::Vector3d pos = traj.getPos(t);
-
-            if (corridor.empty()) continue;
-
-            double point_min_violation = std::numeric_limits<double>::infinity();
-            for (const auto &poly : corridor) {
-                double poly_violation = 0.0;
-                for (int j = 0; j < poly.cols(); ++j) {
-                    Eigen::Vector3d nor = poly.col(j).head<3>();
-                    Eigen::Vector3d pt = poly.col(j).tail<3>();
-                    double d = nor.dot(pt - pos);
-                    double viol = (d < 0.0) ? -d : 0.0;
-                    if (viol > poly_violation) poly_violation = viol;
-                    if (poly_violation > 1.0) break;
-                }
-                if (poly_violation < point_min_violation) point_min_violation = poly_violation;
-                if (point_min_violation <= 0.0) break;
-            }
-
-            if (point_min_violation == std::numeric_limits<double>::infinity()) point_min_violation = 0.0;
-
-            violation_accum_sq += point_min_violation * point_min_violation;
-            ++violation_count;
-
-            // 硬阈值：如果某一点严重越界（例如 > 0.2m），记录并直接判不可行
-            const double hard_violation_thresh = 0.20; // meters
-            if (point_min_violation > hard_violation_thresh) {
-                // 记录严重违例量，供发布逻辑区分 RMS 超限与动力学超限
-                last_rms_violation_ = point_min_violation;
-                ROS_WARN_THROTTLE(2.0, "Trajectory infeasible: severe corridor violation %.3fm at t=%.3f", point_min_violation, t);
-                return false;
-            }
-        }
-
-        if (violation_count > 0) {
-            double rms = std::sqrt(violation_accum_sq / (double)violation_count);
-            // 记录本次可行性检查的 RMS 违例量（米）供后续决策使用
-            last_rms_violation_ = rms;
-            if (rms > constraint_tol) {
-                ROS_WARN_THROTTLE(2.0, "Trajectory infeasible: corridor RMS violation %.6fm > tol %.6fm", rms, constraint_tol);
-                return false;
-            } else {
-                ROS_DEBUG_THROTTLE(2.0, "Trajectory corridor RMS violation OK: %.6fm <= tol %.6fm", rms, constraint_tol);
-            }
-        }
-
-        if (dynamics_failed) {
-            ROS_WARN_THROTTLE(2.0, "Trajectory infeasible: dynamics exceeded limit (max_v=%.3f, max_a=%.3f)", last_v_obs_, last_a_obs_);
+        last_rms_violation_ = std::sqrt(squared / (samples + 1));
+        if (worst > 0.20 || last_rms_violation_ > constraint_tol) {
+            if (worst > 0.20) last_rms_violation_ = std::max(worst, last_rms_violation_);
+            ROS_WARN("Trajectory corridor rejected: max=%.4fm at t=%.3fs pos=(%.3f,%.3f,%.3f), RMS=%.4fm, RMS limit=%.4fm",
+                     worst, worst_t, worst_pos.x(), worst_pos.y(), worst_pos.z(),
+                     std::sqrt(squared / (samples + 1)), constraint_tol);
             return false;
         }
-
+        if (last_v_obs_ > config.maxVelRate + vel_tol || last_a_obs_ > config.maxAccRate + acc_tol) {
+            ROS_WARN("Trajectory dynamics rejected: v=%.3f, a=%.3f", last_v_obs_, last_a_obs_);
+            return false;
+        }
+        ROS_INFO("Trajectory check passed: corridor max=%.4fm RMS=%.4fm, v=%.3f a=%.3f",
+                 worst, last_rms_violation_, last_v_obs_, last_a_obs_);
         return true;
     }
 
@@ -1100,7 +1005,7 @@ public:
                     if (dt >= 0.0 && dt <= KEYPOS_VALID_SECS) keypos_recent = true;
                 }
 
-                if (keypos_recent) {
+                if (keypos_recent && !use_collision_optimization.load()) {
                     chosenFinal = keypos_target_;
                     ROS_INFO("traj_generator: using key_pos as final target (recent %.3fs): (%.3f, %.3f, %.3f)",
                              (now - last_keypos_time_).toSec(), chosenFinal.x(), chosenFinal.y(), chosenFinal.z());
@@ -1597,17 +1502,17 @@ public:
             ROS_INFO("CollisionTrajectory: Combined Sample timing (pre+post): %zu segments, times: [%s]", combined_times.size(), ss2.str().c_str());
         }
 
-        // If this CollisionTrajectory includes post-collision trajectory points,
-        // treat its last point as the intended final target for collision mode.
+        // CollisionTrajectory 中的 post points 只是优化初值；碰撞任务终点由 /goal 决定。
         if (!latest_collision_post_points_.empty()) {
-            const Eigen::Vector3d &last_pt = latest_collision_post_points_.back();
-            finalPos(0) = last_pt.x();
-            finalPos(1) = last_pt.y();
-            finalPos(2) = std::max(last_pt.z(), 0.5);
-            keypos_target_ = Eigen::Vector3d(finalPos(0), finalPos(1), finalPos(2));
-            has_keypos_.store(true);
-            targetInitialized.store(true);
-            ROS_INFO("collisionTrajectoryCallback: set finalPos from CollisionTrajectory end: (%.3f, %.3f, %.3f)", finalPos(0), finalPos(1), finalPos(2));
+            if (has_explicit_goal_.load()) {
+                finalPos = goal_target_;
+                targetInitialized.store(true);
+                ROS_INFO("collisionTrajectoryCallback: keep mission finalPos=(%.3f, %.3f, %.3f); CollisionTrajectory end is initial guess only",
+                         finalPos(0), finalPos(1), finalPos(2));
+            } else {
+                targetInitialized.store(false);
+                ROS_WARN("collisionTrajectoryCallback: waiting for explicit /goal mission target");
+            }
         }
 
         std::vector<collision_gcopter::CollisionEvent> extracted_collision_events;
@@ -1954,6 +1859,45 @@ public:
             mutable_event.initializeConstraintParameters();
         }
 
+        contact_corridor::Poly contact_patch;
+        int contact_parent = -1;
+        double contact_extension = 0.0;
+        double max_extension = 0.36, depth = 0.4;
+        ros::param::param("~CollisionCorridor/max_contact_extension", max_extension, 0.36);
+        ros::param::param("~CollisionCorridor/approach_depth", depth, 0.4);
+        const auto &contact = collision_events_.front();
+        if (collision_events_.size() != 1 ||
+            !contact_corridor::makePatch(corridor, contact.collision_point, contact.plane_normal,
+                max_extension, config.max_position_offset + 0.1, depth,
+                contact_patch, contact_parent, contact_extension)) {
+            ROS_ERROR("Collision corridor rejected: contact requires changing unrelated faces or exceeds local extension limit");
+            return {};
+        }
+        ROS_INFO("Collision contact corridor: parent=%d, local extension=%.3fm (limit %.3fm); original corridor unchanged",
+                 contact_parent, contact_extension, max_extension);
+
+        // 撞后速度可能沿墙面进入下一块走廊。独立选择靠近终点的接触区，
+        // 避免沿用撞前的 parent，使撞后第一段被前一块走廊的侧面截断。
+        int goal_parent = -1;
+        for (int i = 0; i < static_cast<int>(corridor.size()); ++i) {
+            if (contact_corridor::violation(corridor[i], globalGoalState.col(0)) <= 1e-6) {
+                goal_parent = i;
+                break;
+            }
+        }
+        contact_corridor::Poly post_contact_patch;
+        int post_contact_parent = -1;
+        double post_contact_extension = 0.0;
+        if (goal_parent < 0 ||
+            !contact_corridor::makePatch(corridor, contact.collision_point, contact.plane_normal,
+                max_extension, config.max_position_offset + 0.1, depth,
+                post_contact_patch, post_contact_parent, post_contact_extension, goal_parent)) {
+            ROS_ERROR("Collision corridor rejected: no bounded contact patch toward the goal");
+            return {};
+        }
+        ROS_INFO("Post-collision contact corridor: parent=%d, local extension=%.3fm (limit %.3fm)",
+                 post_contact_parent, post_contact_extension, max_extension);
+
         // === 新的分段策略：每段的碰撞发生在该段末端 ===
         
         // 起点 → 碰撞点（碰撞在该段末端）
@@ -1968,8 +1912,12 @@ public:
             segment.end_PVAJ.col(2).setZero();
             segment.end_PVAJ.col(3).setZero();
             
-            // 智能选择必要的走廊：使用pre点裁剪走廊（从膨胀副本中选择以用于优化）
-            segment.corridor = selectCorridorsCoveringPoints(latest_pre_waypoints_, corridor_inflated);
+            // 原始走廊连接到局部接触区，不整体膨胀。
+            if (!contact_corridor::buildSegment(corridor, contact_patch, contact_parent,
+                    globalStartState.col(0), true, segment.corridor)) {
+                ROS_ERROR("Collision corridor: start is outside original corridor");
+                return {};
+            }
             
             segment.is_collision_segment = true;  // 碰撞段
             segment.collision_event = collision_events_[0];
@@ -2012,23 +1960,35 @@ public:
             
             segment.end_PVAJ = globalGoalState;
             
-            // 智能选择必要的走廊：优先用前端提供的 post 段覆盖走廊（使用膨胀副本以用于优化）
-            segment.corridor = selectCorridorsCoveringPoints(latest_collision_post_points_, corridor_inflated);
+            // 撞后从朝向终点的接触区返回原始走廊。
+            if (!contact_corridor::buildSegment(corridor, post_contact_patch, post_contact_parent,
+                    globalGoalState.col(0), false, segment.corridor)) {
+                ROS_ERROR("Collision corridor: post endpoint is outside original corridor");
+                return {};
+            }
             
             segment.is_collision_segment = false;  // 非碰撞段
 
             // Initial guess for post segment from front-end CollisionTrajectory (if available)
             if (has_latest_collision_post_points_.load() && has_latest_collision_post_segment_times_.load())
             {
-                segment.initial_path_waypoints.resize(3, (int)latest_collision_post_points_.size());
-                for (size_t k = 0; k < latest_collision_post_points_.size(); ++k)
-                {
-                    segment.initial_path_waypoints.col((int)k) = latest_collision_post_points_[k];
+                bool initial_guess_inside = true;
+                for (const auto &p : latest_collision_post_points_) {
+                    bool covered = false;
+                    for (const auto &poly : segment.corridor) {
+                        if (contact_corridor::violation(poly, p) <= 1e-6) { covered = true; break; }
+                    }
+                    if (!covered) { initial_guess_inside = false; break; }
                 }
-                segment.initial_segment_times.resize((int)latest_collision_post_segment_times_.size());
-                for (size_t k = 0; k < latest_collision_post_segment_times_.size(); ++k)
-                {
-                    segment.initial_segment_times((int)k) = std::max(1e-6, std::abs(latest_collision_post_segment_times_[k]));
+                if (initial_guess_inside) {
+                    segment.initial_path_waypoints.resize(3, (int)latest_collision_post_points_.size());
+                    for (size_t k = 0; k < latest_collision_post_points_.size(); ++k)
+                        segment.initial_path_waypoints.col((int)k) = latest_collision_post_points_[k];
+                    segment.initial_segment_times.resize((int)latest_collision_post_segment_times_.size());
+                    for (size_t k = 0; k < latest_collision_post_segment_times_.size(); ++k)
+                        segment.initial_segment_times((int)k) = std::max(1e-6, std::abs(latest_collision_post_segment_times_[k]));
+                } else {
+                    ROS_WARN("Ignoring front-end post-collision initial guess outside the selected corridor");
                 }
             }
             
@@ -2081,18 +2041,38 @@ public:
         TicToc timer;
         std::vector<Trajectory<TRAJ_ORDER>> segment_trajectories;
         
-        // 多段轨迹优化
-        bool success = collision_gcopter_.optimizeMultiSegmentTrajectory(
-            segments, config.relCostTol, config.weightT, INFINITY, 
-            config.smoothingEps, config.quadratureResolution, 10,
-            magnitudeBounds, penaltyWeights, config.isDebug,
-            visualizer, optDebugPub, segment_trajectories,
-            config.position_constraint_weight, config.velocity_constraint_weight,
-            config.friction, config.damping_ratio,
-            config.max_collision_velocity);
-
-        if (!success) {
-            ROS_ERROR("Multi-segment trajectory optimization failed");
+        // 与发布前使用相同的逐段校验。若优化落在走廊边缘，只加强位置约束重算，
+        // 不放宽碰撞走廊，也不发布未通过校验的轨迹。
+        bool verified = false;
+        for (int attempt = 0; attempt < 3 && !verified; ++attempt) {
+            segment_trajectories.clear();
+            const bool success = collision_gcopter_.optimizeMultiSegmentTrajectory(
+                segments, config.relCostTol, config.weightT, INFINITY,
+                config.smoothingEps, config.quadratureResolution, 10,
+                magnitudeBounds, penaltyWeights, config.isDebug,
+                visualizer, optDebugPub, segment_trajectories,
+                config.position_constraint_weight, config.velocity_constraint_weight,
+                config.friction, config.damping_ratio,
+                config.max_collision_velocity);
+            if (success && segment_trajectories.size() == segments.size()) {
+                verified = true;
+                for (size_t i = 0; i < segment_trajectories.size(); ++i) {
+                    const double tol = segments[i].is_collision_segment ? 5e-2 : 6e-2;
+                    if (!isTrajectoryFeasible(segment_trajectories[i], tol, 0.05, 0.5,
+                                              &segments[i].corridor)) {
+                        ROS_WARN("Collision segment %zu failed verification on attempt %d", i, attempt + 1);
+                        verified = false;
+                        break;
+                    }
+                }
+            }
+            if (!verified && attempt < 2) {
+                penaltyWeights(0) *= 4.0;
+                ROS_WARN("Collision trajectory rejected; retrying with corridor weight %.0f", penaltyWeights(0));
+            }
+        }
+        if (!verified) {
+            ROS_ERROR("Multi-segment trajectory failed optimization or verification; no trajectory published");
             return;
         }
 
@@ -2143,7 +2123,7 @@ public:
                     evt.pre_collision_velocity = pre_vel_from_traj;
                 }
                 if (post_vel_TRT.allFinite() && post_vel_TRT.norm() > 1e-9) {
-                    evt.post_collision_velocity = post_vel_TRT;
+                    evt.post_collision_velocity = post_vel_from_traj;
                 } else if (post_vel_from_traj.allFinite()) {
                     evt.post_collision_velocity = post_vel_from_traj;
                 }
@@ -2237,51 +2217,24 @@ public:
             genPolyTrajMsg(final_traj, Eigen::Isometry3d::Identity(), unified_start_time, vistrajMsg);
             
             // 在发布前进行快速可行性检查（宽松阈值）
-            double constraint_tol = 5e-2; // 5 cm
+            double constraint_tol = 5e-2; // 撞前段保持 5 cm
+            double post_collision_constraint_tol = 6e-2; // 撞后段 RMS 放宽到 6 cm；最大越界仍限 20 cm
             double vel_tol = 0.05;        // 5 cm/s
             double acc_tol = 0.5;         // 0.5 m/s^2
 
-            bool feasible = isTrajectoryFeasible(final_traj, constraint_tol, vel_tol, acc_tol);
-
-            const double v_lim = config.maxVelRate;
-            const double a_lim = config.maxAccRate;
-            const double k_max = 1.2;
-            const double safety = 1.0;
-
-            bool allow_time_scaled_publish = false;
-            if (feasible) {
-                allow_time_scaled_publish = true;
-            } else if (last_rms_violation_ <= constraint_tol && (last_v_obs_ > v_lim || last_a_obs_ > a_lim)) {
-                allow_time_scaled_publish = true;
-                ROS_WARN("Multi-segment: dynamics overshoot detected but RMS within tol (%.6fm); will apply single-pass time-scaling", last_rms_violation_);
+            // 各段按求解时相同的走廊检查，不能借用另一段的走廊掩盖越界。
+            bool feasible = segment_trajectories.size() == segments.size();
+            for (size_t i = 0; feasible && i < segment_trajectories.size(); ++i) {
+                const double segment_tol = (segments[i].is_collision_segment)
+                    ? constraint_tol : post_collision_constraint_tol;
+                feasible = isTrajectoryFeasible(segment_trajectories[i], segment_tol, vel_tol, acc_tol,
+                                                 &segments[i].corridor);
+                if (!feasible) ROS_WARN("Collision segment %zu failed verification", i);
             }
-
-            if (!allow_time_scaled_publish) {
+            if (!feasible) {
                 ROS_WARN("Multi-segment optimized trajectory failed feasibility check - skipping publish");
             } else {
-                // 计算缩放系数并应用到 per-segment time
-                double v_obs = last_v_obs_;
-                double a_obs = last_a_obs_;
-                double k = 1.0;
-                if (v_obs > v_lim) {
-                    k = (v_obs / v_lim) * safety;
-                } else if (a_obs > a_lim) {
-                    k = std::sqrt(a_obs / a_lim) * safety;
-                }
-                if (k < 1.0) k = 1.0;
-                if (k > k_max) k = k_max;
-
-                if (k > 1.0001) {
-                    ROS_WARN("Applying time-scaling k=%.3f (v_obs=%.3f a_obs=%.3f) to multi-segment trajectory", k, v_obs, a_obs);
-                }
-
-                // Apply scaling to vistrajMsg.time
-                if (k > 1.0001) {
-                    for (size_t ti = 0; ti < vistrajMsg.time.size(); ++ti) {
-                        vistrajMsg.time[ti] = vistrajMsg.time[ti] * k;
-                    }
-                }
-
+                // 碰撞模型依赖真实速度。禁止求解后只改时间，造成碰撞时刻/速度不一致。
                 trajMsg = vistrajMsg;
                 trajPub.publish(trajMsg);
                 visTrajPub.publish(trajMsg);

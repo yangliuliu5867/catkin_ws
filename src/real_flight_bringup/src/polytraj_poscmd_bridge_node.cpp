@@ -194,11 +194,14 @@ private:
 
     bool has_collision_event_{false};
     quadrotor_msgs::CollisionEvent collision_event_;
-    ros::Time last_collision_msg_time_{ros::TIME_MIN};
+    ros::Time active_traj_stamp_;
+    ros::Time pending_collision_stamp_;
+    quadrotor_msgs::CollisionEvent pending_collision_event_;
+    bool has_pending_collision_event_{false};
 
     void loadParameters() {
         pnh_.param<std::string>("traj_topic", traj_topic_, std::string("/trajectory_generator_node/trajectory"));
-        pnh_.param<std::string>("collision_traj_topic", collision_traj_topic_, std::string("/complete_collision_trajectory"));
+        pnh_.param<std::string>("collision_traj_topic", collision_traj_topic_, std::string("/collision_trajectory"));
         pnh_.param<std::string>("odom_topic", odom_topic_, std::string("/visual_slam/odom"));
         pnh_.param<std::string>("start_trigger_topic", start_trigger_topic_, std::string("/traj_start_trigger"));
         pnh_.param<std::string>("ext_force_topic", ext_force_topic_, std::string("/external_force_est"));
@@ -314,8 +317,19 @@ private:
     }
 
     void collisionTrajCallback(const quadrotor_msgs::CollisionTrajectory::ConstPtr &msg) {
-        has_collision_event_ = false;
+        // The optimized event and polynomial trajectory share a start stamp.
+        // Keep an event that arrives first, but never apply it to another plan.
+        if (msg->header.stamp.isZero()) {
+            ROS_WARN_THROTTLE(1.0, "[polytraj_poscmd_bridge] Ignore unstamped collision event");
+            return;
+        }
         if (msg->collision_events.empty()) {
+            if (has_pending_collision_event_ && msg->header.stamp == pending_collision_stamp_) {
+                has_pending_collision_event_ = false;
+            }
+            if (has_traj_ && msg->header.stamp == active_traj_stamp_) {
+                has_collision_event_ = false;
+            }
             return;
         }
 
@@ -325,9 +339,19 @@ private:
             return;
         }
 
-        collision_event_ = event;
-        has_collision_event_ = true;
-        last_collision_msg_time_ = ros::Time::now();
+        pending_collision_event_ = event;
+        pending_collision_stamp_ = msg->header.stamp;
+        has_pending_collision_event_ = true;
+        if (has_traj_ && pending_collision_stamp_ == active_traj_stamp_) {
+            if (event.collision_time <= total_duration_ + 1e-3) {
+                collision_event_ = pending_collision_event_;
+                has_collision_event_ = true;
+            } else {
+                ROS_WARN("[polytraj_poscmd_bridge] Collision time %.3f exceeds total duration %.3f, ignore collision blending",
+                         event.collision_time, total_duration_);
+                has_collision_event_ = false;
+            }
+        }
     }
 
     void trajCallback(const quadrotor_msgs::PolynomialTrajectory::ConstPtr &msg) {
@@ -382,8 +406,12 @@ private:
 
         traj_id_ = msg->trajectory_id;
         const ros::Time now = ros::Time::now();
-        if (last_collision_msg_time_ == ros::TIME_MIN || (now - last_collision_msg_time_).toSec() > 1.0) {
-            has_collision_event_ = false;
+        active_traj_stamp_ = msg->header.stamp;
+        has_collision_event_ = false;
+        if (has_pending_collision_event_ && !active_traj_stamp_.isZero() &&
+            pending_collision_stamp_ == active_traj_stamp_) {
+            collision_event_ = pending_collision_event_;
+            has_collision_event_ = true;
         }
         if (!msg->header.stamp.isZero() && msg->header.stamp > now) {
             traj_start_time_ = msg->header.stamp;

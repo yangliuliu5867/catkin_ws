@@ -1810,7 +1810,7 @@ namespace collision_gcopter
             }
 
             // 计算松弛位置：p_c = p_0 + R*B*r*u
-            Eigen::Vector3d offset = event.rotation_matrix * event.basis_matrix * (event.max_position_offset * u_constrained);
+            Eigen::Vector3d offset = event.basis_matrix * (event.max_position_offset * u_constrained);
             return event.reference_point + offset;
         }
 
@@ -1856,7 +1856,7 @@ namespace collision_gcopter
             }
             
             // 计算松弛末端位置：基于原始末端位置的偏移
-            Eigen::Vector3d offset = event.rotation_matrix * event.basis_matrix * (event.max_position_offset * u_constrained);
+            Eigen::Vector3d offset = event.basis_matrix * (event.max_position_offset * u_constrained);
             return original_tailPVAJ_.col(0) + offset;
         }
 
@@ -1894,7 +1894,7 @@ namespace collision_gcopter
             if (!collision_events_.empty()) {
                 const auto& event = collision_events_[0];
                 Eigen::Vector2d pos_grad_local = -2.0 * relaxed_end_position_weight_ * 
-                    (event.basis_matrix.transpose() * event.rotation_matrix.transpose() * pos_error * event.max_position_offset);
+                    (event.basis_matrix.transpose() * pos_error * event.max_position_offset);
 
                 // 应用||u|| ≤ 1约束的梯度修正
                 double u_norm = u_param.norm();
@@ -1976,7 +1976,7 @@ namespace collision_gcopter
 
             // 位置梯度计算
             Eigen::Vector2d pos_grad_local = -2.0 * collision_position_weight_ *
-                (event.basis_matrix.transpose() * event.rotation_matrix.transpose() * pos_error * event.max_position_offset);
+                (event.basis_matrix.transpose() * pos_error * event.max_position_offset);
 
             if (!pos_grad_local.allFinite()) {
                 return INFINITY;
@@ -3191,10 +3191,10 @@ namespace collision_gcopter
             // collision point is an optimization variable along ONE tangential direction (left-right line segment)
             // Choose the more "horizontal" tangential basis (smaller |dot(z)|) to avoid up/down motion in vertical planes.
             const Eigen::Vector3d world_z(0.0, 0.0, 1.0);
-            const Eigen::Vector3d t0 = event.rotation_matrix * event.basis_matrix.col(0);
-            const Eigen::Vector3d t1 = event.rotation_matrix * event.basis_matrix.col(1);
+            const Eigen::Vector3d t0 = event.basis_matrix.col(0);
+            const Eigen::Vector3d t1 = event.basis_matrix.col(1);
             const int t_idx = (std::abs(t0.dot(world_z)) <= std::abs(t1.dot(world_z))) ? 0 : 1;
-            const Eigen::Vector3d M_dir = (event.rotation_matrix * event.basis_matrix.col(t_idx)) * event.max_position_offset;
+            const Eigen::Vector3d M_dir = (event.basis_matrix.col(t_idx)) * event.max_position_offset;
 
             double u_constrained = u_param;
             double ducon_du = 1.0;
@@ -3650,10 +3650,10 @@ namespace collision_gcopter
                 if (!collision_events_.empty()) {
                     const auto &event = collision_events_[0];
                     const Eigen::Vector3d world_z(0.0, 0.0, 1.0);
-                    const Eigen::Vector3d t0 = event.rotation_matrix * event.basis_matrix.col(0);
-                    const Eigen::Vector3d t1 = event.rotation_matrix * event.basis_matrix.col(1);
+                    const Eigen::Vector3d t0 = event.basis_matrix.col(0);
+                    const Eigen::Vector3d t1 = event.basis_matrix.col(1);
                     const int t_idx = (std::abs(t0.dot(world_z)) <= std::abs(t1.dot(world_z))) ? 0 : 1;
-                    const Eigen::Vector3d M_dir = (event.rotation_matrix * event.basis_matrix.col(t_idx)) * event.max_position_offset;
+                    const Eigen::Vector3d M_dir = (event.basis_matrix.col(t_idx)) * event.max_position_offset;
 
                     double u_constrained = u_param;
                     if (u_param > 1.0) u_constrained = 1.0;
@@ -3763,7 +3763,9 @@ namespace collision_gcopter
             }
 
             // 方案B：外部迭代，碰撞前速度变为可优化，碰撞后速度通过TRT反馈确定
-            const int max_iterations = 1;  // 最大迭代次数（外层只迭代一次）
+            int max_iterations = 8;
+            ros::param::param("~CollisionOptimization/max_iterations", max_iterations, 8);
+            max_iterations = std::max(1, std::min(30, max_iterations));
             const double convergence_threshold = 0.05;  // 速度收敛阈值
             const double relaxation_factor = 0.7;  // 松弛因子，防止震荡
             
@@ -3783,7 +3785,7 @@ namespace collision_gcopter
                 
                 // 执行联合优化（pre速度可优化，post速度固定）
                 double cost = optimizeJoint(traj_pre_out, traj_post_out, relCostTol);
-                if (cost >= INFINITY) {
+                if (!std::isfinite(cost)) {
                     ROS_ERROR("optimizeCollisionTrajectoryJoint: optimization failed at iteration %d", iter + 1);
                     return false;
                 }
@@ -3804,32 +3806,32 @@ namespace collision_gcopter
                 
                 // 检查收敛性
                 double pre_vel_change = (v_pre_end_optimized - pre_collision_vel_prev).norm();
-                double post_vel_change = (v_post_TRT - post_collision_vel_prev).norm();
+                double post_vel_change = (v_post_TRT - traj_post_out.getVel(0.0)).norm();
+                if (!v_post_TRT.allFinite() || !v_pre_end_optimized.allFinite()) return false;
                 
                 ROS_INFO("Iter %d: pre_vel_change=%.4f, post_vel_change=%.4f", 
                          iter + 1, pre_vel_change, post_vel_change);
                 
-                if (pre_vel_change < convergence_threshold && post_vel_change < convergence_threshold) {
+                if (post_vel_change < convergence_threshold) {
                     converged = true;
                     ROS_INFO("Converged at iteration %d!", iter + 1);
                     break;
                 }
                 
+                if (iter + 1 == max_iterations) break;
+
                 // 更新边界条件（使用松弛因子防止震荡）
                 Eigen::Vector3d new_pre_vel = pre_collision_vel_prev + 
                     relaxation_factor * (v_pre_end_optimized - pre_collision_vel_prev);
                 Eigen::Vector3d new_post_vel = post_collision_vel_prev + 
                     relaxation_factor * (v_post_TRT - post_collision_vel_prev);
                 
-                // 速度幅值安全检查
-                if (new_pre_vel.norm() > max_collision_velocity_ || new_post_vel.norm() > max_collision_velocity_) {
-                    ROS_WARN("Iter %d: Velocity magnitude exceeds limit, normalizing...", iter + 1);
-                    if (new_pre_vel.norm() > max_collision_velocity_) {
-                        new_pre_vel = new_pre_vel.normalized() * max_collision_velocity_;
-                    }
-                    if (new_post_vel.norm() > max_collision_velocity_) {
-                        new_post_vel = new_post_vel.normalized() * max_collision_velocity_;
-                    }
+                // max_collision_velocity_ 表示主动撞击前的速度上限。
+                // 撞后速度由 TRT 碰撞模型决定，不能再截断到撞前上限，否则模型给出的
+                // 反弹速度超过该值时，下一轮又会被改回去，迭代将永远无法收敛。
+                if (new_pre_vel.norm() > max_collision_velocity_) {
+                    ROS_WARN("Iter %d: Pre-collision velocity exceeds limit, normalizing...", iter + 1);
+                    new_pre_vel = new_pre_vel.normalized() * max_collision_velocity_;
                 }
                 
                 // 更新边界条件为下一次迭代
@@ -3854,7 +3856,8 @@ namespace collision_gcopter
             }
             
             if (!converged) {
-                ROS_WARN("Iterative optimization did not converge within %d iterations", max_iterations);
+                ROS_ERROR("Collision optimization rejected: rebound velocity mismatch after %d iterations", max_iterations);
+                return false;
             }
             
             // 打印最终结果

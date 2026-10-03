@@ -31,6 +31,8 @@ CollisionModel:
   friction: 0.65
   damping_ratio: 0.10
   max_collision_velocity: 2.0
+  # 定位中心到机体前端实际接触部位的距离；用于把原始雷达墙面换算为机体中心碰撞点。
+  body_front_offset_m: 0.15
   # 世界坐标系水平外力 sqrt(Fx^2 + Fy^2) 的碰撞阈值，单位 N。
   collision_force_threshold: 4.0
   collision_cooldown_sec: 1.0

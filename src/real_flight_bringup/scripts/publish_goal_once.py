@@ -6,14 +6,21 @@ from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import State
 from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
+from std_msgs.msg import Int32
 
 
 class _StateCache:
-    def __init__(self, state_topic: str, odom_topic: str):
+    def __init__(self, state_topic: str, odom_topic: str, command_topic=None):
         self.state = None
         self.odom = None
+        self.command = None
         self._state_sub = rospy.Subscriber(state_topic, State, self._state_cb, queue_size=1)
         self._odom_sub = rospy.Subscriber(odom_topic, Odometry, self._odom_cb, queue_size=1)
+        if command_topic:
+            self._command_sub = rospy.Subscriber(command_topic, Int32, self._command_cb, queue_size=1)
+
+    def _command_cb(self, msg: Int32):
+        self.command = msg.data
 
     def _state_cb(self, msg: State):
         self.state = msg
@@ -54,6 +61,32 @@ def _wait_for_offboard(cache: _StateCache, timeout_sec: float) -> bool:
             return True
         if timeout_sec > 0.0 and (rospy.Time.now() - start).to_sec() > timeout_sec:
             return False
+        rospy.sleep(0.05)
+    return False
+
+
+def _fsm_hover_ready(cache, altitude, z_tolerance):
+    return (cache.command in (3, 5) and cache.state is not None
+            and cache.state.armed and cache.state.mode.upper() == "OFFBOARD"
+            and cache.odom is not None
+            and abs(cache.odom.pose.pose.position.z - altitude) <= z_tolerance)
+
+
+def _wait_for_fsm_hover(cache, altitude, z_tolerance, hold_sec):
+    # Waiting for the operator/takeoff must not consume the pre-align timeout.
+    # cmd5 is also accepted if the operator switches after reaching hover height.
+    reached_since = None
+    rospy.loginfo("publish_goal_once: waiting for FSM cmd3/cmd5, armed OFFBOARD and hover height")
+    while not rospy.is_shutdown():
+        now = rospy.Time.now()
+        if _fsm_hover_ready(cache, altitude, z_tolerance):
+            if reached_since is None:
+                reached_since = now
+            if (now - reached_since).to_sec() >= max(0.0, hold_sec):
+                rospy.loginfo("publish_goal_once: FSM hover ready, start pre-align stage")
+                return True
+        else:
+            reached_since = None
         rospy.sleep(0.05)
     return False
 
@@ -298,6 +331,8 @@ def main():
 
     enable_pre_align = bool(rospy.get_param("~enable_pre_align", False))
     wait_offboard = bool(rospy.get_param("~wait_offboard", True))
+    wait_for_fsm_hover = bool(rospy.get_param("~wait_for_fsm_hover", False))
+    fsm_command_topic = rospy.get_param("~fsm_command_topic", "/fsm_ctrl/command")
     offboard_wait_timeout_sec = float(rospy.get_param("~offboard_wait_timeout_sec", 0.0))
     state_topic = rospy.get_param("~state_topic", "/mavros/state")
     odom_topic = rospy.get_param("~odom_topic", "/visual_slam/odom")
@@ -319,7 +354,8 @@ def main():
     pub = rospy.Publisher(topic, PoseStamped, queue_size=1)
 
     if enable_pre_align:
-        cache = _StateCache(state_topic, odom_topic)
+        cache = _StateCache(state_topic, odom_topic,
+                            fsm_command_topic if wait_for_fsm_hover else None)
         pre_align_cmd_pub = rospy.Publisher(pre_align_cmd_topic, PositionCommand, queue_size=20)
         rospy.sleep(0.2)
 
@@ -328,7 +364,11 @@ def main():
             rospy.logerr("publish_goal_once: odom wait timeout, abort goal publish")
             return
 
-        if wait_offboard:
+        if wait_for_fsm_hover:
+            if not _wait_for_fsm_hover(cache, pre_align_altitude,
+                                       pre_align_z_tolerance, pre_align_hold_sec):
+                return
+        elif wait_offboard:
             rospy.loginfo("publish_goal_once: waiting OFFBOARD mode before pre-align")
             if not _wait_for_offboard(cache, offboard_wait_timeout_sec):
                 rospy.logerr("publish_goal_once: OFFBOARD wait timeout, abort goal publish")

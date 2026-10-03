@@ -42,6 +42,7 @@
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <dynamic_reconfigure/server.h>
@@ -101,6 +102,8 @@ private:
     ros::Time last_online_replan_;
     // preset-related auto-trigger removed to avoid redundancy
     std::shared_ptr<GlobalMap> glbMapPtr;
+    // Keep the undilated online measurements for validating a physical contact surface.
+    std::shared_ptr<const pcl::PointCloud<pcl::PointXYZ>> raw_collision_cloud_;
     Visualizer visualizer;
     Eigen::Vector3d bound_min, bound_max;
 
@@ -171,6 +174,8 @@ private:
     // latest execution status from controller (protected by mutex)
     std::mutex status_mutex_;
     geometry_msgs::PoseStamped latest_pred_pose;
+    ros::Time pred_pose_received_, pred_vel_received_, pred_acc_received_;
+    ros::Time last_goal_received_;
     geometry_msgs::Vector3 latest_pred_vel;
     geometry_msgs::Vector3 latest_pred_acc;
     double latest_remaining_time = 0.0;
@@ -183,6 +188,8 @@ private:
     bool use_time_based_collision_end_trigger_{true};
     double collision_external_force_threshold_ = 4.0;
     std::atomic<bool> is_force_high_{false};
+    int consecutive_contact_force_count_{0};
+    bool credible_force_contact_{false};
     int consecutive_low_force_count_{0};
     // Previous planned-collision-end trigger state.
     bool prev_collision_trigger_state_{false};
@@ -233,7 +240,7 @@ private:
         Completed = 4,
     };
     std::atomic<int> special_scene_stage_{static_cast<int>(SpecialSceneReplanStage::Disabled)};
-    double special_scene_post_collision_wait_sec_{0.5};
+    double special_scene_post_collision_wait_sec_{3.0};
     double special_scene_final_astar_cruise_speed_mps_{1.2};
     double special_scene_final_astar_min_dt_{0.25};
     double special_scene_final_astar_waypoint_spacing_m_{0.8};
@@ -487,7 +494,7 @@ private:
     {
         if (full_corridor.empty() || points.empty())
         {
-            return full_corridor;
+            return {};
         }
 
         const int num_corridors = static_cast<int>(full_corridor.size());
@@ -513,6 +520,12 @@ private:
                 required_start = std::min(required_start, idx_found);
                 required_end = std::max(required_end, idx_found);
             }
+            else
+            {
+                ROS_WARN("Corridor crop rejected: uncovered path point (%.3f,%.3f,%.3f)",
+                         pt.x(), pt.y(), pt.z());
+                return {};
+            }
         }
 
         if (!found_any)
@@ -531,6 +544,86 @@ private:
             selected.push_back(full_corridor[i]);
         }
         return selected;
+    }
+
+    inline bool corridorChainCovers(
+        const std::vector<Eigen::Matrix<double, 6, -1>> &chain,
+        const std::vector<Eigen::Vector3d> &points)
+    {
+        if (chain.empty() || points.empty()) return false;
+        for (const auto &point : points) {
+            bool covered = false;
+            for (const auto &poly : chain) {
+                if (incorridor(poly, point)) { covered = true; break; }
+            }
+            if (!covered) return false;
+        }
+        for (size_t i = 1; i < chain.size(); ++i) {
+            Eigen::Matrix<double, 6, -1> intersection(6, chain[i-1].cols() + chain[i].cols());
+            intersection.leftCols(chain[i-1].cols()) = chain[i-1];
+            intersection.rightCols(chain[i].cols()) = chain[i];
+            Eigen::Vector3d interior;
+            if (!geoutils::findInterior(intersection, interior)) {
+                // 走廊由沿同一条稠密路径顺序生成。相邻多面体在边界附近可能只有很薄的
+                // 交集，findInterior 的严格内点测试会受数值精度影响。路径覆盖仍是硬条件，
+                // 此处只记录诊断，交给后端优化器判断该组多面体是否可用。
+                ROS_WARN_THROTTLE(2.0,
+                    "Corridor pair %zu/%zu has no strict numerical interior; keeping path-covered chain",
+                    i - 1, i);
+            }
+        }
+        return true;
+    }
+
+    inline bool planRemainsSafeOnLatestMap(
+        const quadrotor_msgs::TrajectoryPlan &plan,
+        const bool allow_intended_collision,
+        const Eigen::Vector3d &collision_normal,
+        const Eigen::Vector3d &collision_point)
+    {
+        auto map_snapshot = std::atomic_load(&glbMapPtr);
+        if (!map_snapshot || !map_snapshot->ogmPtr || plan.waypoints.empty()) return false;
+
+        const double grid = std::max(0.02, map_snapshot->getScale());
+        const double sample_spacing = std::max(0.02, 0.5 * grid);
+        const double collision_band = config.dilateRadius + 2.0 * grid;
+        const bool collision_plane_valid =
+            allow_intended_collision && collision_normal.allFinite() &&
+            collision_point.allFinite() && collision_normal.norm() > 1e-6;
+        Eigen::Vector3d n = Eigen::Vector3d::Zero();
+        if (collision_plane_valid) n = collision_normal.normalized();
+
+        auto point_is_allowed = [&](const Eigen::Vector3d &p) {
+            bool free = false;
+            try { free = map_snapshot->safeQuery(p); } catch (...) { free = false; }
+            if (free) return true;
+            // 主动碰撞轨迹必然进入墙体的膨胀层；只豁免选中碰撞平面附近的窄带。
+            return collision_plane_valid &&
+                   std::fabs(n.dot(p - collision_point)) <= collision_band;
+        };
+
+        Eigen::Vector3d prev(plan.waypoints.front().x,
+                             plan.waypoints.front().y,
+                             plan.waypoints.front().z);
+        if (!prev.allFinite() || !point_is_allowed(prev)) return false;
+        for (size_t i = 1; i < plan.waypoints.size(); ++i) {
+            const Eigen::Vector3d cur(plan.waypoints[i].x,
+                                      plan.waypoints[i].y,
+                                      plan.waypoints[i].z);
+            if (!cur.allFinite()) return false;
+            const double length = (cur - prev).norm();
+            const int samples = std::max(1, static_cast<int>(std::ceil(length / sample_spacing)));
+            for (int j = 1; j <= samples; ++j) {
+                const Eigen::Vector3d p = prev + (cur - prev) * (double(j) / samples);
+                if (!point_is_allowed(p)) {
+                    ROS_WARN("Updated map invalidates planned path at (%.2f,%.2f,%.2f)",
+                             p.x(), p.y(), p.z());
+                    return false;
+                }
+            }
+            prev = cur;
+        }
+        return true;
     }
     // preset auto-trigger logic removed
 
@@ -702,6 +795,8 @@ public:
         executing_collision_traj_.store(false);
         collision_exec_until_sec_.store(0.0);
         suppress_time_replan_until_sec_.store(0.0);
+        consecutive_contact_force_count_ = 0;
+        credible_force_contact_ = false;
     }
 
     inline bool handleSpecialSceneCollisionEndTrigger(const char *reason, double wait_sec)
@@ -885,6 +980,9 @@ private:
 
         auto global_ptr = std::atomic_load(&latest_astar_global_path_ptr_);
         auto corridor_ptr = std::atomic_load(&latest_corridor_ptr_);
+        const Eigen::Vector3d start(odom_local.pose.pose.position.x,
+                                    odom_local.pose.pose.position.y,
+                                    odom_local.pose.pose.position.z);
 
         bool need_recompute = true;
         {
@@ -893,26 +991,38 @@ private:
                              !corridor_ptr || corridor_ptr->empty() ||
                              !goalMatchesCachedAstarGoal(goal_local);
         }
+        // 同一个目标也不能复用不再包含飞机当前位置的走廊。
+        if (!need_recompute && !corridorChainCovers(*corridor_ptr, {start})) {
+            ROS_WARN("Cached corridor misses current start or is disconnected; rebuilding from odometry");
+            need_recompute = true;
+        }
         if (!need_recompute)
         {
             corridor_ready_.store(true);
             return true;
         }
 
-        // Compute global A* once using current odom as start snapshot.
-        Eigen::Vector3d start(odom_local.pose.pose.position.x,
-                              odom_local.pose.pose.position.y,
-                              odom_local.pose.pose.position.z);
-        start.z() = goal_local.z();
+        // A* 在任务高度的二维切片中搜索；真实三维起点只用于随后生成走廊。
+        // 直接把实际高度交给 A* 会在飞机高度和目标高度略有差异时落入另一层栅格，
+        // 从而出现地图明明可通行但搜索失败的情况。
+        Eigen::Vector3d astar_start = start;
+        astar_start.z() = goal_local.z();
         Eigen::Vector3d goal = goal_local;
 
         std::vector<Eigen::Vector3d> global_path_new;
-        if (!computeGlobalAstarPath(start, goal, bound_min_local, bound_max_local, global_path_new))
+        if (!computeGlobalAstarPath(astar_start, goal, bound_min_local, bound_max_local, global_path_new))
         {
-            ROS_WARN("ensureGlobalAstarPathAndFullCorridorBuilt: global A* failed");
+            ROS_WARN("ensureGlobalAstarPathAndFullCorridorBuilt: global A* failed, start=(%.2f,%.2f,%.2f), goal=(%.2f,%.2f,%.2f)",
+                     astar_start.x(), astar_start.y(), astar_start.z(),
+                     goal.x(), goal.y(), goal.z());
             return false;
         }
         for (auto &p : global_path_new) p.z() = goal_local.z();
+        // A* 返回的是网格中心；生成走廊必须从真实三维起点开始。
+        if ((global_path_new.front() - start).norm() > 1e-6)
+            global_path_new.insert(global_path_new.begin(), start);
+        else
+            global_path_new.front() = start;
 
         // Generate FULL corridor along the global path.
         std::vector<Eigen::Matrix<double, 6, -1>> full_corridor;
@@ -1303,6 +1413,9 @@ private:
                 pcl::io::loadPCDFile<pcl::PointXYZ>(path + config.pointCloudPath, cloudDense);
 
                 glbMapPtr->initialize(cloudDense, config.outlierThreshold);
+                std::atomic_store(&raw_collision_cloud_,
+                                  std::shared_ptr<const pcl::PointCloud<pcl::PointXYZ>>(
+                                      std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(cloudDense)));
                 pubMap(cloudDense);
 
                 mapInitialized.store(true);
@@ -1359,6 +1472,9 @@ private:
 
         auto new_map = std::make_shared<GlobalMap>(config);
         new_map->initialize(cloudDense, config.outlierThreshold, bound_min_local, bound_max_local);
+        std::atomic_store(&raw_collision_cloud_,
+                          std::shared_ptr<const pcl::PointCloud<pcl::PointXYZ>>(
+                              std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(cloudDense)));
         std::atomic_store(&glbMapPtr, new_map);
         mapInitialized.store(true);
         last_online_map_update_ = now;
@@ -1440,12 +1556,14 @@ private:
     {
         std::lock_guard<std::mutex> lk(status_mutex_);
         latest_pred_pose = *msg;
+        pred_pose_received_ = ros::Time::now();
     }
 
     inline void statusPredVelCallback(const geometry_msgs::Vector3Stamped::ConstPtr &msg)
     {
         std::lock_guard<std::mutex> lk(status_mutex_);
         latest_pred_vel = msg->vector;
+        pred_vel_received_ = ros::Time::now();
     }
 
     inline void statusPredAccCallback(const geometry_msgs::Vector3Stamped::ConstPtr &msg)
@@ -1453,6 +1571,7 @@ private:
         // Currently not used, but stored for potential future use
         std::lock_guard<std::mutex> lk(status_mutex_);
         latest_pred_acc = msg->vector;
+        pred_acc_received_ = ros::Time::now();
         // Placeholder: could store latest_pred_acc if needed
     }
 
@@ -1468,10 +1587,30 @@ private:
         const double horizontal_force_mag = std::hypot(msg->vector.x, msg->vector.y);
         bool current_force_high = (horizontal_force_mag > collision_external_force_threshold_);
         
-        if (current_force_high)
+        bool near_planned_surface = false;
+        if (current_force_high && getSpecialSceneStage() == SpecialSceneReplanStage::AwaitCollisionEnd)
+        {
+            nav_msgs::Odometry odom_local;
+            {
+                std::lock_guard<std::mutex> lk(odom_mutex_);
+                odom_local = odom;
+            }
+            std::lock_guard<std::mutex> lk(selected_collision_plane_mutex_);
+            if (has_selected_collision_plane_)
+            {
+                const Eigen::Vector3d p(odom_local.pose.pose.position.x,
+                                        odom_local.pose.pose.position.y,
+                                        odom_local.pose.pose.position.z);
+                near_planned_surface = std::abs(selected_collision_plane_normal_.dot(
+                    p - selected_collision_plane_point_)) <= 0.35;
+            }
+        }
+
+        if (current_force_high && near_planned_surface)
         {
             is_force_high_.store(true);
             consecutive_low_force_count_ = 0;
+            if (++consecutive_contact_force_count_ >= 3) credible_force_contact_ = true;
         }
         else if (is_force_high_.load())
         {
@@ -1480,15 +1619,22 @@ private:
             {
                 is_force_high_.store(false);
                 consecutive_low_force_count_ = 0;
+                consecutive_contact_force_count_ = 0;
                 
                 // 仅当我们确实在执行碰撞轨迹时，才根据外力下降触发“碰撞完毕”的重规划
-                if (isExecutingCollisionTrajectoryNow())
+                if (credible_force_contact_ && isExecutingCollisionTrajectoryNow())
                 {
+                    credible_force_contact_ = false;
                     handleSpecialSceneCollisionEndTrigger("special_scene_force_falling_edge",
                                                           special_scene_post_collision_wait_sec_);
                     return;
                 }
+                credible_force_contact_ = false;
             }
+        }
+        else
+        {
+            consecutive_contact_force_count_ = 0;
         }
     }
 
@@ -1543,6 +1689,7 @@ private:
 
     inline bool incorridor(const Eigen::Matrix<double, 6, -1> &corridor, const Eigen::Vector3d &pt)
     {
+        if (!pt.allFinite() || corridor.cols() == 0 || !corridor.allFinite()) return false;
         Eigen::Vector3d nor_vct, point;
         for (int i = 0; i < corridor.cols(); i++)
         {
@@ -1550,7 +1697,8 @@ private:
             point = corridor.col(i).array().tail(3);
 
             double dot = nor_vct.dot(point - pt);
-            if (dot < 0)
+            const double nrm = nor_vct.norm();
+            if (nrm < 1e-9 || dot < -1e-6 * nrm)
                 return false;
         }
         return true;
@@ -1584,10 +1732,23 @@ private:
                                std::vector<Eigen::Matrix<double, 6, -1>> &corridorSeq)
     {
         corridorSeq.clear();
+        if (pathList.empty()) return false;
+        // 在路径折点之间补采样，使新的多面体在离开旧多面体时及时生成。
+        // 不能从一段走廊直接跳到 0.8m 之外的下一个稀疏路径点。
+        std::vector<Eigen::Vector3d> dense_path{pathList.front()};
+        const double spacing = std::max(0.01, 0.5 * config.gridResolution);
+        for (size_t i = 1; i < pathList.size(); ++i) {
+            if (!pathList[i-1].allFinite() || !pathList[i].allFinite()) return false;
+            const double length = (pathList[i] - pathList[i-1]).norm();
+            const int count = std::max(1, static_cast<int>(std::ceil(length / spacing)));
+            for (int j = 1; j <= count; ++j)
+                dense_path.push_back(pathList[i-1] + (pathList[i] - pathList[i-1]) * (double(j) / count));
+        }
         Eigen::Matrix<double, 6, -1> cur_corridor;
         bool ret;
         if (nowcorridor.size())
         {
+            corridorSeq = nowcorridor;
             cur_corridor = *(nowcorridor.end() - 1);
         }
         else
@@ -1604,7 +1765,7 @@ private:
             cur_corridor = *corridorSeq.begin();
         }
 
-        for (auto iter = pathList.begin(); iter != pathList.end(); iter++)
+        for (auto iter = dense_path.begin(); iter != dense_path.end(); iter++)
         {
             if (!incorridor(cur_corridor, *iter))
             {
@@ -1621,6 +1782,11 @@ private:
             }
         }
         CorridorShortCut(corridorSeq);
+        if (!corridorChainCovers(corridorSeq, dense_path)) {
+            ROS_ERROR("Generated corridor rejected: dense A* path is not fully covered");
+            corridorSeq.clear();
+            return false;
+        }
         return true;
     }
 
@@ -2540,6 +2706,21 @@ private:
         target(0) = msg->pose.position.x;
         target(1) = msg->pose.position.y;
         target(2) = msg->pose.position.z;
+        if (!target.allFinite()) return;
+        {
+            std::lock_guard<std::mutex> lk(status_mutex_);
+            const ros::Time now = ros::Time::now();
+            // mission 的短时间重复发送是重传，不能反复清除碰撞执行状态。
+            if (has_active_goal_.load() && !last_goal_received_.isZero() &&
+                (now - last_goal_received_).toSec() >= 0.0 &&
+                (now - last_goal_received_).toSec() < 1.0 &&
+                (target - latest_goal_).norm() < 1e-4) {
+                last_goal_received_ = now;
+                ROS_INFO("Ignoring repeated goal within 1 s retransmission window");
+                return;
+            }
+            last_goal_received_ = now;
+        }
         loadPosAtt(key_pos, plan_msg, target);
 
         {
@@ -2592,9 +2773,30 @@ private:
             odom_local = odom;
             bound_min_local = bound_min;
             bound_max_local = bound_max;
-            pred_pose = latest_pred_pose;
-            pred_vel = latest_pred_vel;
-            pred_acc = latest_pred_acc;
+            const ros::Time now = ros::Time::now();
+            auto fresh = [&](const ros::Time &stamp) {
+                const double age = (now - stamp).toSec();
+                return !stamp.isZero() && age >= 0.0 && age <= 0.3;
+            };
+            const auto &p = latest_pred_pose.pose.position;
+            const auto &v = latest_pred_vel;
+            const auto &a = latest_pred_acc;
+            const bool prediction_ok = fresh(pred_pose_received_) && fresh(pred_vel_received_) &&
+                fresh(pred_acc_received_) &&
+                Eigen::Vector3d(p.x, p.y, p.z).allFinite() &&
+                Eigen::Vector3d(v.x, v.y, v.z).allFinite() &&
+                Eigen::Vector3d(a.x, a.y, a.z).allFinite();
+            if (prediction_ok) {
+                pred_pose = latest_pred_pose;
+                pred_vel = latest_pred_vel;
+                pred_acc = latest_pred_acc;
+            } else {
+                pred_pose.header = odom_local.header;
+                pred_pose.pose = odom_local.pose.pose;
+                pred_vel = odom_local.twist.twist.linear;
+                pred_acc = geometry_msgs::Vector3();
+                ROS_INFO_THROTTLE(2.0, "Planner start: using current odometry (prediction absent/stale)");
+            }
             goal_local = latest_goal_;
         }
 
@@ -2633,6 +2835,11 @@ private:
             ROS_WARN("getCorridorFromSetPos: local path too short after AABB crop");
             return;
         }
+        // A* 路径点位于栅格中心，必须显式把实际规划起点加入局部路径。
+        if ((local_path.front() - base).norm() > 1e-6)
+            local_path.insert(local_path.begin(), base);
+        else
+            local_path.front() = base;
         {
             auto sp = std::make_shared<std::vector<Eigen::Vector3d>>(local_path);
             std::atomic_store(&latest_astar_local_path_ptr_, sp);
@@ -2640,11 +2847,18 @@ private:
 
         // Select corridor subset that covers the local path points.
         std::vector<Eigen::Matrix<double, 6, -1>> sel = selectCorridorsCoveringPoints(local_path, *full_corridor_ptr);
-        if (sel.empty())
+        if (sel.empty() || !corridorChainCovers(sel, local_path))
         {
-            sel = selectRequiredCorridors(base, local_path.back(), *full_corridor_ptr);
+            ROS_WARN("Cached corridor subset does not cover the local path; regenerating from current start");
+            std::vector<Eigen::Matrix<double, 6, -1>> regenerated;
+            if (!corridorSeqGen(local_path, {}, regenerated) ||
+                !corridorChainCovers(regenerated, local_path)) {
+                ROS_ERROR("Local corridor regeneration failed coverage/overlap validation; skip planning");
+                return;
+            }
+            sel = std::move(regenerated);
         }
-        const auto &to_pub = (!sel.empty()) ? sel : (*full_corridor_ptr);
+        const auto &to_pub = sel;
 
         const SpecialSceneReplanStage special_stage = getSpecialSceneStage();
         const bool do_special_initial = (special_stage == SpecialSceneReplanStage::AwaitInitialCollisionPlan);
@@ -2714,15 +2928,84 @@ private:
             const double O = 0.5 * GR;
             const double adjust = (D + O - DR) + 0.01;
             const double d_obs = n.dot(selected_collision_plane_point_);
-            const double d = d_obs + adjust;
+            double d = d_obs + adjust;
+
+            // The corridor face is the boundary of a dilated obstacle, not the
+            // physical wall.  The collision event is a body-centre position;
+            // place it one measured body-front offset before the raw wall.
+            const auto raw_cloud = std::atomic_load(&raw_collision_cloud_);
+            const double body_front = this->config.collision_body_front_offset_m;
+            if (!raw_cloud || raw_cloud->empty() || !std::isfinite(body_front) ||
+                body_front <= 0.0 || body_front > 1.0)
+            {
+                ROS_WARN("Special scene stage-1: raw wall cloud or body_front_offset_m unavailable; skip collision plan");
+                return;
+            }
+
+            auto raw_wall_gap = [&](const geometry_msgs::Point &contact, double &gap) {
+                const Eigen::Vector3d p(contact.x, contact.y, contact.z);
+                const Eigen::Vector3d tangent(-n.y(), n.x(), 0.0);
+                std::vector<double> distances;
+                distances.reserve(64);
+                for (const auto &pt : raw_cloud->points)
+                {
+                    if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
+                    const Eigen::Vector3d delta = Eigen::Vector3d(pt.x, pt.y, pt.z) - p;
+                    const double along = n.dot(delta);
+                    if (along < 0.06 || along > 0.75 ||
+                        std::abs(tangent.dot(delta)) > 0.30 || std::abs(delta.z()) > 0.25)
+                        continue;
+                    distances.push_back(along);
+                }
+                if (distances.size() < 6) return false;
+                const size_t idx = distances.size() / 10;
+                std::nth_element(distances.begin(), distances.begin() + idx, distances.end());
+                gap = distances[idx];
+                return true;
+            };
 
             quadrotor_msgs::CollisionTrajectory ct;
             bool has_ct = false;
-            forward_plan = sample_forward::generateMixedTrajectory(pred_pose, pred_vel, pred_acc, att,
-                                  plane_candidates, goal_local,
-                                  preferred_target, preferred_dir_unit,
-                                  this->config, n, d, selected_collision_plane_width_,
-                                  selected_collision_plane_point_, &ct, &has_ct);
+            bool contact_aligned = false;
+            for (int attempt = 0; attempt < 3; ++attempt)
+            {
+                ct = quadrotor_msgs::CollisionTrajectory();
+                has_ct = false;
+                forward_plan = sample_forward::generateMixedTrajectory(pred_pose, pred_vel, pred_acc, att,
+                                      plane_candidates, goal_local,
+                                      preferred_target, preferred_dir_unit,
+                                      this->config, n, d, selected_collision_plane_width_,
+                                      selected_collision_plane_point_, &ct, &has_ct);
+                if (!has_ct || forward_plan.trajectory_mode != quadrotor_msgs::TrajectoryPlan::MODE_COLLISION ||
+                    ct.collision_events.empty()) break;
+
+                double wall_gap = 0.0;
+                if (!raw_wall_gap(ct.collision_events.front().collision_point, wall_gap))
+                {
+                    ROS_WARN("Special scene stage-1: no raw wall surface in the planned collision lane; skip collision plan");
+                    break;
+                }
+                const double correction = wall_gap - body_front;
+                ROS_INFO("Collision contact calibration: attempt=%d raw_wall_gap=%.3fm body_front=%.3fm correction=%.3fm",
+                         attempt + 1, wall_gap, body_front, correction);
+                if (std::abs(correction) <= 0.04)
+                {
+                    contact_aligned = true;
+                    break;
+                }
+                if (std::abs(correction) > 0.25 || std::abs(d + correction - (d_obs + adjust)) > 0.30)
+                {
+                    ROS_WARN("Special scene stage-1: contact correction exceeds local corridor limit; skip collision plan");
+                    break;
+                }
+                d += correction;
+            }
+
+            if (!contact_aligned)
+            {
+                ROS_WARN("Special scene stage-1: collision point is not aligned with measured wall; refusing collision plan");
+                return;
+            }
 
             if (has_ct && forward_plan.trajectory_mode == quadrotor_msgs::TrajectoryPlan::MODE_COLLISION)
             {
@@ -2761,8 +3044,19 @@ private:
 
         if (!config.useLoadPCDFile && planning_map_version != online_map_version_.load())
         {
-            // A newer map arrived while A*/corridor/trajectory generation was running.
-            // Do not publish that stale trajectory; the queued worker pass will rebuild it.
+            // LIO 发布的是持续补全的累计地图。版本变化本身不表示本轮规划已失效；
+            // 使用最新地图沿计划采样，只有新增占据真正挡住路径时才丢弃。
+            const bool allow_collision_band =
+                do_special_initial &&
+                forward_plan.trajectory_mode == quadrotor_msgs::TrajectoryPlan::MODE_COLLISION;
+            if (planRemainsSafeOnLatestMap(forward_plan, allow_collision_band,
+                                           selected_collision_plane_normal_,
+                                           selected_collision_plane_point_))
+            {
+                ROS_WARN("Online map updated during planning, but the planned path remains valid; publishing it");
+            }
+            else
+            {
             {
                 std::lock_guard<std::mutex> lk(astar_cache_mutex_);
                 astar_cached_goal_valid_ = false;
@@ -2781,8 +3075,9 @@ private:
             if (do_special_initial)
                 suppress_time_replan_until_sec_.store(0.0);
             replan_requested_.store(true);
-            ROS_WARN("Online map changed during planning; dropping stale trajectory and rebuilding");
+            ROS_WARN("Online map added occupancy on the planned path; dropping trajectory and rebuilding");
             return;
+            }
         }
 
         keyPosPub.publish(forward_plan);
@@ -3352,7 +3647,8 @@ private:
     {
         // Select among vertical candidates with verified_frontier==false.
         // Rule: angle(v_dir, n_xy) <= max_ang_deg AND (yaw aligns with v_dir or -v_dir within max_ang_deg)
-        // AND Euclidean distance >= min_dist_m; then choose the max width.
+        // 候选必须是最新地图中真实存在的、位于飞行正前方的近似竖直墙面。
+        // 不能仅凭“走廊外侧未知”选择多面体边界。
 
         Eigen::Vector3d pos(odom_local.pose.pose.position.x,
                             odom_local.pose.pose.position.y,
@@ -3381,13 +3677,40 @@ private:
         const double cos_th2 = cos_th * cos_th;
 
         std::shared_ptr<PlaneCandidate> best;
+        double best_ray_dist = INFINITY;
         double best_width = -1.0;
-        double best_dist = 0.0;
+
+        auto raw_cloud = std::atomic_load(&raw_collision_cloud_);
+        auto candidate_has_mapped_surface = [&](const PlaneCandidate &cand) {
+            if (!raw_cloud || raw_cloud->empty()) return false;
+            const Eigen::Vector3d normal = cand.normal_unit.normalized();
+            const Eigen::Vector2d n_xy = normal.head<2>().normalized();
+            const double approach = n_xy.dot(cand.point_on_plane.head<2>() - pos.head<2>());
+            if (!std::isfinite(approach) || approach <= 0.0) return false;
+            // Check the actual flight lane, not the arbitrary point used to describe the face.
+            const Eigen::Vector2d contact_xy = pos.head<2>() + approach * n_xy;
+            int raw_hits = 0;
+            for (const auto &pt : raw_cloud->points) {
+                if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
+                const Eigen::Vector2d delta = Eigen::Vector2d(pt.x, pt.y) - contact_xy;
+                const double along = delta.dot(n_xy);
+                const double lateral = std::abs(n_xy.x() * delta.y() - n_xy.y() * delta.x());
+                // A corridor boundary more than 0.45 m before the measured wall
+                // must never be promoted to a physical collision plane.
+                if (along >= -0.05 && along <= 0.45 && lateral <= 0.35 &&
+                    std::abs(static_cast<double>(pt.z) - pos.z()) <= 0.35) {
+                    if (++raw_hits >= 3) return true;
+                }
+            }
+            return false;
+        };
 
         for (const auto &cand : candidates)
         {
             if (!cand.vertical) continue;
             if (cand.verified_frontier) continue; // we only handle unverified here
+            if (!cand.normal_unit.allFinite() || std::abs(cand.normal_unit.z()) > 0.15) continue;
+            if (!candidate_has_mapped_surface(cand)) continue;
 
             Eigen::Vector2d n_xy(cand.normal_unit.x(), cand.normal_unit.y());
             const double n_norm = n_xy.norm();
@@ -3403,20 +3726,23 @@ private:
             const double dot_yv = yaw_dir.dot(v_dir);
             if (!(dot_yv * dot_yv >= cos_th2)) continue;
 
-            const double dist_m = std::fabs(cand.normal_unit.dot(pos - cand.point_on_plane));
-            if (!std::isfinite(dist_m) || dist_m < min_dist_m || dist_m > max_dist_m) continue;
+            const Eigen::Vector2d delta(cand.point_on_plane.x() - pos.x(),
+                                        cand.point_on_plane.y() - pos.y());
+            const double denom = n_xy.dot(v_dir);
+            if (!std::isfinite(denom) || denom < cos_th) continue;
+            const double ray_dist = n_xy.dot(delta) / denom;
+            if (!std::isfinite(ray_dist) || ray_dist < min_dist_m || ray_dist > max_dist_m) continue;
 
             const double w = cand.width;
             if (!std::isfinite(w)) continue;
-            if (w > best_width)
+            if (ray_dist < best_ray_dist - 0.10 ||
+                (std::fabs(ray_dist - best_ray_dist) <= 0.10 && w > best_width))
             {
+                best_ray_dist = ray_dist;
                 best_width = w;
-                best_dist = dist_m;
                 best = std::make_shared<PlaneCandidate>(cand);
             }
         }
-
-        (void)best_dist; // currently only used for caching/logging
         return best;
     }
 
@@ -3439,7 +3765,7 @@ private:
         //              n.x(), n.y(), n.z(), pt.x(), pt.y(), pt.z(), c.width);
         // }
 
-        auto best = selectBestUnverifiedVerticalCollisionPlane(candidates, odom_local, 10.0, 2.0, 6.0, 0.10);
+        auto best = selectBestUnverifiedVerticalCollisionPlane(candidates, odom_local, 10.0, 0.8, 6.0, 0.10);
         double dist_m = 0.0;
         if (best)
         {
@@ -3449,73 +3775,17 @@ private:
             dist_m = (best->point_on_plane - pos).norm();
         }
 
-        // center point (odom snapshot) for later semicircle sampling
-        Eigen::Vector3d center(odom_local.pose.pose.position.x,
-                               odom_local.pose.pose.position.y,
-                               odom_local.pose.pose.position.z);
-
         {
             std::lock_guard<std::mutex> lk(selected_collision_plane_mutex_);
             if (best)
             {
-                // Additional filter: check semicircle area in front of vehicle for obstacles
-                bool semicircle_has_obstacle = false;
-                auto map_snapshot = std::atomic_load(&glbMapPtr);
-                if (map_snapshot && map_snapshot->ogmPtr)
-                {
-                    auto ogm = map_snapshot->ogmPtr;
-                    double cellS = ogm->getScale();
-                    if (cellS <= 1e-9) cellS = this->config.gridResolution > 1e-9 ? this->config.gridResolution : 0.2;
-
-                    Eigen::Vector3d plane_pt = best->point_on_plane;
-                    Eigen::Vector2d dir(plane_pt.x() - center.x(), plane_pt.y() - center.y());
-                    if (dir.norm() < 1e-6) dir = Eigen::Vector2d(1.0, 0.0);
-                    dir.normalize();
-
-                    const double radius = std::max(0.5, dist_m);
-                    const int ang_steps = 18; // 180deg / 10deg samples
-                    for (int ai = -ang_steps/2; ai <= ang_steps/2 && !semicircle_has_obstacle; ++ai)
-                    {
-                        const double ang = (static_cast<double>(ai) / static_cast<double>(ang_steps)) * M_PI; // -pi/2 .. +pi/2
-                        const double c = std::cos(ang), s = std::sin(ang);
-                        Eigen::Vector2d v(c * dir.x() - s * dir.y(), s * dir.x() + c * dir.y());
-                        // sample radial steps from half-cell to radius
-                        for (double r = cellS * 0.5; r <= radius; r += cellS)
-                        {
-                            Eigen::Vector3d sample(center.x() + v.x() * r,
-                                                   center.y() + v.y() * r,
-                                                   plane_pt.z());
-                            Eigen::Vector3i idx = ogm->convertPosD2I(sample);
-                            idx.z() = ogm->convertPosD2I(Eigen::Vector3d(sample.x(), sample.y(), plane_pt.z())).z();
-                            try {
-                                if (ogm->queryIdx(idx)) { semicircle_has_obstacle = true; break; }
-                            } catch(...) { /* ignore query errors */ }
-                        }
-                    }
-                }
-
-                if (!semicircle_has_obstacle)
-                {
-                    // Reject this collision plane as no obstacle present in semicircle area
-                    has_selected_collision_plane_ = false;
-                    selected_collision_plane_normal_.setZero();
-                    selected_collision_plane_point_.setZero();
-                    selected_collision_plane_width_ = 0.0;
-                    selected_collision_plane_distance_m_ = 0.0;
-                    selected_collision_plane_corridor_idx_ = -1;
-                    selected_collision_plane_face_idx_ = -1;
-                    ROS_INFO("Rejected collision plane by semicircle-obstacle-filter: dist=%.3f", dist_m);
-                }
-                else
-                {
-                    has_selected_collision_plane_ = true;
-                    selected_collision_plane_normal_ = best->normal_unit;
-                    selected_collision_plane_point_ = best->point_on_plane;
-                    selected_collision_plane_width_ = best->width;
-                    selected_collision_plane_distance_m_ = dist_m;
-                    selected_collision_plane_corridor_idx_ = best->corridor_idx;
-                    selected_collision_plane_face_idx_ = best->face_idx;
-                }
+                has_selected_collision_plane_ = true;
+                selected_collision_plane_normal_ = best->normal_unit;
+                selected_collision_plane_point_ = best->point_on_plane;
+                selected_collision_plane_width_ = best->width;
+                selected_collision_plane_distance_m_ = dist_m;
+                selected_collision_plane_corridor_idx_ = best->corridor_idx;
+                selected_collision_plane_face_idx_ = best->face_idx;
             }
             else
             {
@@ -3529,7 +3799,7 @@ private:
             }
         }
 
-        if (best)
+        if (best && has_selected_collision_plane_)
         {
             Eigen::Vector3d n = best->normal_unit;
             double d = -(n.dot(best->point_on_plane));

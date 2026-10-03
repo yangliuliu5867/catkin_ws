@@ -25,7 +25,7 @@
         name="fake_poscmd_to_odom" output="screen">
     <param name="cmd_topic" value="/position_command" />
     <param name="odom_topic" value="/visual_slam/odom" />
-    <param name="collision_topic" value="/complete_collision_trajectory" />
+    <param name="collision_topic" value="/collision_trajectory" />
     <param name="goal_topic" value="/goal" />
     <param name="pred_pose_topic" value="/trajectory_predicted_pose" />
     <param name="pred_vel_topic" value="/trajectory_predicted_velocity" />
@@ -99,7 +99,7 @@
 
   <node pkg="real_flight_bringup" type="publish_fake_collision_trigger.py"
         name="publish_fake_collision_trigger" output="screen">
-    <param name="collision_topic" value="/complete_collision_trajectory" />
+    <param name="collision_topic" value="/collision_trajectory" />
     <param name="trigger_topic" value="/collision_trigger" />
     <param name="goal_topic" value="/goal" />
     <param name="transition_duration" value="0.15" />

@@ -1,5 +1,6 @@
 traj_topic: /trajectory_generator_node/trajectory
-collision_traj_topic: /complete_collision_trajectory
+# 与 /trajectory_generator_node/trajectory 同一后端生成的优化后碰撞事件。
+collision_traj_topic: /collision_trajectory
 odom_topic: /visual_slam/odom
 start_trigger_topic: /traj_start_trigger
 ext_force_topic: /external_force_est

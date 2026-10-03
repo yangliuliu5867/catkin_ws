@@ -1,7 +1,7 @@
 # Mission endpoint configuration.
 # Start point is always current odometry position at trigger time.
 
-SetPos: [1.0, 2.0, 1.00]
+SetPos: [0.0, 3.5, 1.40]
 SetAtt: [0.0, 0.0, 1.0, 0.0]
 
 GoalPublish:

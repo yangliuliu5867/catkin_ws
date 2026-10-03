@@ -39,6 +39,7 @@ struct Config
     double friction;                    // 切向速度保留系数（0.0 - 1.0），默认 0.65
     double damping_ratio;               // 法向阻尼比（0.0 - 1.0），默认 0.1
     double max_collision_velocity; // 碰撞模型中允许的最大碰撞速度
+    double collision_body_front_offset_m{0.24}; // 定位中心到前端接触部位的距离
 
     // SampleForward 权重参数（默认值与旧实现保持一致）
     double w_collision;
@@ -97,6 +98,7 @@ struct Config
         }
         // 从命名空间 CollisionModel 读取 max_collision_velocity（兼容现有 yaml）
         nh_priv.getParam("CollisionModel/max_collision_velocity", max_collision_velocity);
+        nh_priv.param("CollisionModel/body_front_offset_m", collision_body_front_offset_m, 0.24);
         // 从 SampleForward/weights 读取权重参数（可选，保持默认值如果不存在）
         nh_priv.getParam("SampleForward/weights/w_collision", w_collision);
         nh_priv.getParam("SampleForward/weights/w_kin", w_kin);
