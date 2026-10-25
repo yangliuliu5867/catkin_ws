@@ -123,6 +123,7 @@ private:
         std::vector<double> coef_x;
         std::vector<double> coef_y;
         std::vector<double> coef_z;
+        std::vector<double> coef_yaw;
     };
 
     struct TrajectorySample {
@@ -131,6 +132,9 @@ private:
         Eigen::Vector3d acceleration{Eigen::Vector3d::Zero()};
         Eigen::Vector3d jerk{Eigen::Vector3d::Zero()};
         int segment_index{0};
+        double yaw{0.0};
+        double yaw_rate{0.0};
+        bool has_yaw{false};
     };
 
     ros::NodeHandle nh_;
@@ -370,6 +374,18 @@ private:
         std::vector<PolySegment> parsed_segments;
         parsed_segments.reserve(msg->num_segment);
 
+        const size_t expected_coefficients = std::accumulate(
+            msg->order.begin(), msg->order.end(), static_cast<size_t>(0),
+            [](const size_t sum, const uint32_t order) {
+                return sum + static_cast<size_t>(order + 1);
+            });
+        const bool has_yaw_coefficients = !msg->coef_yaw.empty();
+        if (has_yaw_coefficients && msg->coef_yaw.size() != expected_coefficients) {
+            ROS_ERROR("[polytraj_poscmd_bridge] Yaw coefficient size mismatch: got %zu, expected %zu",
+                      msg->coef_yaw.size(), expected_coefficients);
+            return;
+        }
+
         size_t shift = 0;
         for (size_t idx = 0; idx < msg->num_segment; ++idx) {
             const int order = static_cast<int>(msg->order[idx]);
@@ -395,6 +411,10 @@ private:
                               msg->coef_y.begin() + static_cast<long>(shift + coeff_count));
             seg.coef_z.assign(msg->coef_z.begin() + static_cast<long>(shift),
                               msg->coef_z.begin() + static_cast<long>(shift + coeff_count));
+            if (has_yaw_coefficients) {
+                seg.coef_yaw.assign(msg->coef_yaw.begin() + static_cast<long>(shift),
+                                    msg->coef_yaw.begin() + static_cast<long>(shift + coeff_count));
+            }
             parsed_segments.push_back(std::move(seg));
             shift += coeff_count;
         }
@@ -473,6 +493,13 @@ private:
         sample.jerk.x() = evalPolyDerivative(seg.coef_x, tau, 3) / (seg_time * seg_time * seg_time);
         sample.jerk.y() = evalPolyDerivative(seg.coef_y, tau, 3) / (seg_time * seg_time * seg_time);
         sample.jerk.z() = evalPolyDerivative(seg.coef_z, tau, 3) / (seg_time * seg_time * seg_time);
+        if (!seg.coef_yaw.empty()) {
+            // traj_gen emits yaw coefficients in physical segment time, while
+            // XYZ coefficients above are normalized to tau.
+            sample.yaw = normalizeAngle(evalPoly(seg.coef_yaw, t_local));
+            sample.yaw_rate = evalPolyDerivative(seg.coef_yaw, t_local, 1);
+            sample.has_yaw = true;
+        }
         return sample;
     }
 
@@ -496,6 +523,10 @@ private:
         sample.velocity = v0 + acc * tau;
         sample.acceleration = acc;
         sample.jerk = Eigen::Vector3d::Zero();
+        const TrajectorySample yaw_sample = sampleBaseTrajectory(t_global);
+        sample.yaw = yaw_sample.yaw;
+        sample.yaw_rate = yaw_sample.yaw_rate;
+        sample.has_yaw = yaw_sample.has_yaw;
         return sample;
     }
 
@@ -533,6 +564,7 @@ private:
             sample.velocity.setZero();
             sample.acceleration.setZero();
             sample.jerk.setZero();
+            sample.yaw_rate = 0.0;
             sample.segment_index = std::max(0, static_cast<int>(segments_.size()) - 1);
             return sample;
         }
@@ -555,7 +587,7 @@ private:
         cmd.acceleration = eigenToVector(sample.acceleration);
         cmd.jerk = eigenToVector(sample.jerk);
         cmd.yaw = yaw;
-        cmd.yaw_dot = 0.0;
+        cmd.yaw_dot = sample.has_yaw ? sample.yaw_rate : 0.0;
         cmd.trajectory_id = traj_id_;
         cmd.trajectory_flag = completed ? quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_COMPLETED
                                         : quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_READY;
@@ -572,10 +604,12 @@ private:
         for (int i = 0; i < horizon_points_; ++i) {
             const double point_time = t_eval + static_cast<double>(i) * horizon_dt_;
             const TrajectorySample point_sample = sampleReference(point_time);
+            const double point_yaw = point_sample.has_yaw
+                ? point_sample.yaw : yaw;
             horizon.points.push_back(makePositionCommand(
                 point_sample,
                 now + ros::Duration(static_cast<double>(i) * horizon_dt_),
-                yaw,
+                point_yaw,
                 point_time >= total_duration_));
         }
         horizon_pub_.publish(horizon);
@@ -598,6 +632,9 @@ private:
         const TrajectorySample sample = sampleReference(t_eval);
 
         double cmd_yaw = normalizeAngle(hold_yaw_);
+        if (sample.has_yaw) {
+            cmd_yaw = sample.yaw;
+        }
         if (use_external_force_collision_hold_ && force_collision_hold_active_ && has_odom_) {
             cmd_yaw = normalizeAngle(yawFromQuaternion(latest_odom_.pose.pose.orientation));
         }
@@ -616,6 +653,9 @@ private:
         ps.header.frame_id = "world";
         ps.pose.position = eigenToPoint(sample.position);
         double vis_yaw = normalizeAngle(hold_yaw_);
+        if (sample.has_yaw) {
+            vis_yaw = sample.yaw;
+        }
         if (use_external_force_collision_hold_ && force_collision_hold_active_ && has_odom_) {
             vis_yaw = normalizeAngle(yawFromQuaternion(latest_odom_.pose.pose.orientation));
         }

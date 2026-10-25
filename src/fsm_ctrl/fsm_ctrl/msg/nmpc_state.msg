@@ -5,3 +5,5 @@ geometry_msgs/Vector3 vel_fdb
 geometry_msgs/Quaternion attitude_fdb
 geometry_msgs/Quaternion attitude_ref
 mavros_msgs/AttitudeTarget target
+geometry_msgs/Vector3 disturbance_accel
+bool ndob_active

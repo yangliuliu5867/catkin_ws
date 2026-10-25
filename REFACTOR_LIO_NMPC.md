@@ -280,6 +280,54 @@ nmpc_xy_integral_max_error: 0.30
 积分修正统一加到整个NMPC参考窗口的X、Y位置上，不修改速度、加速度、轨迹形状和碰撞时序。
 位置误差超过0.30米时停止累积，修正量每轴限制在±0.10米，状态机命令切换时清零。
 
+## 抓取负载的NDOB补偿
+
+NMPC平移动力学现为：
+
+```text
+p_dot = v
+v_dot = R(q) * e3 * a_z - g * e3 + d_hat
+```
+
+其中`d_hat`是世界坐标系下的三轴等效加速度扰动，并在一个0.4秒预测时域内视为常值。
+控制器没有在NMPC输出后直接叠加油门，而是让优化器在原角速度和总推力约束内同时补偿
+扰动，避免补偿量绕开输入限幅。
+
+NDOB使用辅助状态实现，不对有噪声的速度做数值微分：
+
+```text
+d_hat = z + L * v
+z_dot  = -L * (d_hat + R(q) * e3 * a_z - g * e3)
+```
+
+对慢变或分段常值负载，估计误差按带宽`L`一阶收敛。抓取后增加的重量通常表现为
+`d_hat.z < 0`；绳摆、质心偏移和气流会同时出现在XY估计中。NDOB只在cmd 3、5、7的
+NMPC闭环运行时更新，离开NMPC控制或重新进入时以当前速度零扰动初始化，避免模式切换突跳。
+
+默认参数位于`real_flight_bringup/config/nmpc.yaml`：
+
+```yaml
+nmpc_ndob_enable: true
+nmpc_ndob_bandwidth_x: 2.0
+nmpc_ndob_bandwidth_y: 2.0
+nmpc_ndob_bandwidth_z: 3.0
+nmpc_ndob_limit_x: 3.0
+nmpc_ndob_limit_y: 3.0
+nmpc_ndob_limit_z: 6.0
+```
+
+`/nmpc_state/disturbance_accel`发布实时估计值，单位为`m/s^2`。建议真机调试顺序：
+
+1. 先不抓取悬停，确认三轴估计接近零且无持续振荡；
+2. 保持默认低带宽抓取已知质量，确认Z估计为负且量级合理；
+3. 若补偿太慢，每次只把Z带宽增加0.5；若油门或高度抖动则降低Z带宽；
+4. XY只有在负载摆动已经受控后再提高，不能用高带宽NDOB掩盖机械摆动；
+5. 始终检查悬停油门余量。负载后的稳态油门接近1.0时，软件补偿无法替代推力裕量。
+
+现有`external_wrench_estimation`仍只用于碰撞/接触逻辑。它包含接触力、推力模型误差和
+负载的混合效应，且碰撞实验需要保留瞬态外力，因此没有把该话题直接反馈到NMPC，避免
+接触瞬间形成控制正反馈或把碰撞力当作长期负载补偿。
+
 ## MPD模型接入
 
 `real_flight_step1.launch` 使用 `mpd_model_dir` 统一指定MPD模型目录，并把三个engine路径同时

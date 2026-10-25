@@ -49,6 +49,7 @@
 #include <quadrotor_msgs/Corridor.h>
 #include <quadrotor_msgs/CorridorList.h>
 #include <quadrotor_msgs/TrajectoryPlan.h>
+#include <quadrotor_msgs/FlightWaypoint.h>
 #include <quadrotor_msgs/PolynomialTrajectory.h>
 #include <quadrotor_msgs/PositionCommand.h>
 #include <quadrotor_msgs/CollisionTrajectory.h>
@@ -74,6 +75,7 @@ private:
 
     ros::NodeHandle nh;
     ros::Subscriber targetSub;
+    ros::Subscriber flightWaypointSub;
     ros::Subscriber odomSub;
     ros::Subscriber mapSub;
     ros::Subscriber boundSub;
@@ -230,6 +232,10 @@ private:
     // goal / replan suppression state
     Eigen::Vector3d latest_goal_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d current_traj_goal_{Eigen::Vector3d::Zero()};
+    std::atomic<int> latest_goal_mode_{quadrotor_msgs::FlightWaypoint::MODE_UNSET};
+    std::atomic<uint32_t> latest_goal_id_{std::numeric_limits<uint32_t>::max()};
+    std::atomic<bool> has_requested_goal_yaw_{false};
+    std::atomic<double> requested_goal_yaw_{0.0};
     double arrival_remaining_time_thresh_{0.3};
     enum class SpecialSceneReplanStage : int
     {
@@ -705,6 +711,9 @@ public:
             // 新增这一行：即使是非 PCD 模式，也把 intentionPub 初始化好
             intentionPub = nh.advertise<quadrotor_msgs::TrajectoryPlan>("/MyPointSeq", 1000);
         }
+        flightWaypointSub = nh.subscribe("/flight_waypoint_goal", 1,
+                                         &GlobalPlanner::flightWaypointCallBack, this,
+                                         ros::TransportHints().tcpNoDelay());
         // NOTE: The periodic corridor worker is disabled. We build the full corridor once
         // after global A* is available, then select/publish subsets on demand.
 
@@ -787,9 +796,13 @@ public:
         return static_cast<SpecialSceneReplanStage>(special_scene_stage_.load());
     }
 
-    inline void resetSpecialSceneStateForNewGoal()
+    inline void resetSpecialSceneStateForNewGoal(uint8_t flight_mode)
     {
-        special_scene_stage_.store(static_cast<int>(SpecialSceneReplanStage::AwaitInitialCollisionPlan));
+        const SpecialSceneReplanStage first_stage =
+            flight_mode == quadrotor_msgs::FlightWaypoint::MODE_COLLISION_FREE
+                ? SpecialSceneReplanStage::AwaitFinalAvoidance
+                : SpecialSceneReplanStage::AwaitInitialCollisionPlan;
+        special_scene_stage_.store(static_cast<int>(first_stage));
         collision_event_trigger_.store(false);
         collision_candidate_active_.store(false);
         executing_collision_traj_.store(false);
@@ -2692,7 +2705,11 @@ private:
         }
     }
 
-    inline void setposCallBack(const geometry_msgs::PoseStamped::ConstPtr &msg)
+    inline void handleMissionGoal(const Eigen::Vector3d &target,
+                                  uint8_t flight_mode,
+                                  uint32_t waypoint_id,
+                                  bool has_yaw,
+                                  double yaw)
     {
         static int seq = 0;
         if (!odomInitialized.load())
@@ -2702,11 +2719,15 @@ private:
         }
         quadrotor_msgs::TrajectoryPlan plan_msg;
         Eigen::Matrix3Xd key_pos;
-        Eigen::Vector3d target;
-        target(0) = msg->pose.position.x;
-        target(1) = msg->pose.position.y;
-        target(2) = msg->pose.position.z;
         if (!target.allFinite()) return;
+        if (flight_mode != quadrotor_msgs::FlightWaypoint::MODE_UNSET &&
+            flight_mode != quadrotor_msgs::FlightWaypoint::MODE_COLLISION_FREE &&
+            flight_mode != quadrotor_msgs::FlightWaypoint::MODE_COLLISION)
+        {
+            ROS_ERROR("Rejecting waypoint %u: invalid flight_mode=%u", waypoint_id,
+                      static_cast<unsigned int>(flight_mode));
+            return;
+        }
         {
             std::lock_guard<std::mutex> lk(status_mutex_);
             const ros::Time now = ros::Time::now();
@@ -2714,7 +2735,9 @@ private:
             if (has_active_goal_.load() && !last_goal_received_.isZero() &&
                 (now - last_goal_received_).toSec() >= 0.0 &&
                 (now - last_goal_received_).toSec() < 1.0 &&
-                (target - latest_goal_).norm() < 1e-4) {
+                (target - latest_goal_).norm() < 1e-4 &&
+                latest_goal_mode_.load() == flight_mode &&
+                latest_goal_id_.load() == waypoint_id) {
                 last_goal_received_ = now;
                 ROS_INFO("Ignoring repeated goal within 1 s retransmission window");
                 return;
@@ -2728,6 +2751,10 @@ private:
             std::lock_guard<std::mutex> lk(status_mutex_);
             latest_goal_ = target;
         }
+        latest_goal_mode_.store(flight_mode);
+        latest_goal_id_.store(waypoint_id);
+        has_requested_goal_yaw_.store(has_yaw && std::isfinite(yaw));
+        if (has_yaw && std::isfinite(yaw)) requested_goal_yaw_.store(yaw);
         has_active_goal_.store(true);
 
         // New goal resets collision-candidate latch.
@@ -2736,15 +2763,41 @@ private:
         executing_collision_traj_.store(false);
         collision_exec_until_sec_.store(0.0);
         suppress_time_replan_until_sec_.store(0.0);
-        resetSpecialSceneStateForNewGoal();
+        resetSpecialSceneStateForNewGoal(flight_mode);
+
+        ROS_INFO("Accepted mission waypoint id=%u mode=%u xyz=(%.3f, %.3f, %.3f)%s",
+                 waypoint_id, static_cast<unsigned int>(flight_mode),
+                 target.x(), target.y(), target.z(), has_yaw ? " with yaw" : "");
 
         plan_msg.header.seq = ++seq;
-        // Only publish to /MyPointSeq when explicitly configured to load PCD (preserve original behavior).
-        if (config.useLoadPCDFile)
+        // The legacy PCD seed comes from SetPos/SetAtt. A mode-aware mission
+        // must not briefly publish that unrelated single-goal seed.
+        if (config.useLoadPCDFile && flight_mode == quadrotor_msgs::FlightWaypoint::MODE_UNSET)
         {
             intentionPub.publish(plan_msg);
         }
         getCorridorFromSetPos(plan_msg, key_pos);
+    }
+
+    inline void setposCallBack(const geometry_msgs::PoseStamped::ConstPtr &msg)
+    {
+        Eigen::Vector3d target(msg->pose.position.x,
+                               msg->pose.position.y,
+                               msg->pose.position.z);
+        // Legacy /goal keeps the project's historical collision-first behavior.
+        handleMissionGoal(target, quadrotor_msgs::FlightWaypoint::MODE_UNSET,
+                          std::numeric_limits<uint32_t>::max(), false, 0.0);
+    }
+
+    inline void flightWaypointCallBack(const quadrotor_msgs::FlightWaypoint::ConstPtr &msg)
+    {
+        if (!std::isfinite(msg->yaw))
+        {
+            ROS_ERROR("Rejecting waypoint %u: yaw is not finite", msg->id);
+            return;
+        }
+        Eigen::Vector3d target(msg->position.x, msg->position.y, msg->position.z);
+        handleMissionGoal(target, msg->flight_mode, msg->id, true, msg->yaw);
     }
 
     void getCorridorFromSetPos(quadrotor_msgs::TrajectoryPlan &plan_msg, const Eigen::Matrix3Xd & /*key_pos*/)
@@ -3080,6 +3133,16 @@ private:
             }
         }
 
+        // Preserve the requested terminal attitude in the planning payload as well.
+        // The trajectory generator also receives FlightWaypoint directly and turns
+        // this into yaw polynomial coefficients.
+        if (has_requested_goal_yaw_.load() && !forward_plan.headings.empty())
+        {
+            const double yaw = requested_goal_yaw_.load();
+            forward_plan.headings.back().x = std::cos(yaw);
+            forward_plan.headings.back().y = std::sin(yaw);
+            forward_plan.headings.back().z = 0.0;
+        }
         keyPosPub.publish(forward_plan);
         intentionPub.publish(forward_plan);
         {

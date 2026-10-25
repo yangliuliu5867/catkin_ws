@@ -9,6 +9,7 @@
 #include <vector>
 #include <eigen3/Eigen/Dense>
 #include <ctrl_math/ctrl_math.hpp>
+#include <fsm_ctrl/nonlinear_disturbance_observer.hpp>
 
 #define G 9.8015
 #define GRAVITY 9.8015
@@ -47,9 +48,11 @@ class NMPC_Ctrller_simple
         /* NMPC outputs */
         Eigen::Vector3d w_command; //求解结果，最优角速度
         double acc_z_command; //求解结果，最优力
+        double collective_acceleration_command; // NMPC原始总推力加速度
         std::vector<double> optimal_command; //所有最优输出总集合
 
         ThrEst thr_est;
+        NonlinearDisturbanceObserver disturbance_observer;
 
     public:
         NMPC_Ctrller_simple(double _ctrl_T,
@@ -86,6 +89,9 @@ class NMPC_Ctrller_simple
 
         Eigen::Vector3d getwCommand() const {return w_command;}  //
         double getAcc_zCommand() const {return acc_z_command;}  //
+        double getCollectiveAccelerationCommand() const {return collective_acceleration_command;}
+        Eigen::Vector3d getDisturbanceEstimate() const {return disturbance_observer.estimate();}
+        bool isDisturbanceObserverEnabled() const {return disturbance_observer.enabled();}
         std::vector<double> getOptimalCommand() const {return optimal_command;}  //
 
         void setNLPCostQpos(Eigen::Matrix<float, 3, 1> _NLP_costQpos) {NLP_costQ_pos = _NLP_costQpos;}  //
@@ -93,6 +99,15 @@ class NMPC_Ctrller_simple
         void setNLPCostQquat(Eigen::Matrix<float, 3, 1> _NLP_costQquat) {NLP_costQ_quat = _NLP_costQquat;}  //
         void setNLPCostRw(Eigen::Matrix<float, 3, 1> _NLP_costRw) {NLP_costR_w = _NLP_costRw;}  //
         void setNLPCostRacc_z(double _NLP_costR_acc_z) {NLP_costR_acc_z = _NLP_costR_acc_z;}  // 
+
+        void configureDisturbanceObserver(bool enabled,
+                                          const Eigen::Vector3d &bandwidth,
+                                          const Eigen::Vector3d &estimate_limit,
+                                          double gravity);
+        void resetDisturbanceObserver(const Eigen::Vector3d &velocity);
+        void updateDisturbanceObserver(const Eigen::Vector3d &velocity,
+                                       const Eigen::Quaterniond &attitude,
+                                       double dt);
         
         void optimal_solution(std::vector<double> _current_states, std::vector<double> _desired_params);
 };

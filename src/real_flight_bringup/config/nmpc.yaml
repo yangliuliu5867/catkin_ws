@@ -28,3 +28,15 @@ nmpc_xy_integral_gain: 0.08
 nmpc_xy_integral_limit: 0.10
 nmpc_xy_integral_leak: 0.01
 nmpc_xy_integral_max_error: 0.30
+
+# 非线性扰动观测器（NDOB）。估计量为世界坐标系下的等效加速度扰动，
+# 并作为常值扰动加入整个 NMPC 预测时域。抓取负载后通常首先表现为负 Z 扰动。
+nmpc_ndob_enable: true
+# 观测器带宽 rad/s：Z 轴稍快以补偿负载，XY 保守以避免速度噪声引起倾斜抖动。
+nmpc_ndob_bandwidth_x: 2.0
+nmpc_ndob_bandwidth_y: 2.0
+nmpc_ndob_bandwidth_z: 3.0
+# 扰动估计限幅 m/s^2；必须保留足够的总推力余量。
+nmpc_ndob_limit_x: 3.0
+nmpc_ndob_limit_y: 3.0
+nmpc_ndob_limit_z: 6.0

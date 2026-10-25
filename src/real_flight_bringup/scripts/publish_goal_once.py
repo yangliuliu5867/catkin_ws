@@ -322,6 +322,16 @@ def _run_pre_align(cache: _StateCache,
 def main():
     rospy.init_node("publish_goal_once", anonymous=False)
 
+    mission_mode_param = rospy.get_param("~mission_mode_param", "")
+    if mission_mode_param:
+        mission_mode = str(rospy.get_param(mission_mode_param, "single")).strip().lower()
+        if mission_mode not in ("single", "multi"):
+            rospy.logerr("Invalid mission mode %r in %s", mission_mode, mission_mode_param)
+            return 1
+        if mission_mode == "multi":
+            rospy.loginfo("Mission.mode=multi; original single-goal publisher is inactive")
+            return 0
+
     setpos_param = rospy.get_param("~setpos_param", "/SetPos")
     topic = rospy.get_param("~topic", "/goal")
     frame_id = rospy.get_param("~frame_id", "world")

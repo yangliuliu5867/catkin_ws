@@ -27,6 +27,7 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
     NLP_costQ_quat = _NLP_costQ_quat;
     NLP_costR_w = _NLP_costR_w;
     NLP_costR_acc_z = _NLP_costR_acc_z;
+    collective_acceleration_command = world_gravity_acc;
 
     thr_est.Set_Estor(50, _hover_thrust);
 
@@ -42,6 +43,7 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
     /* inputs */
     casadi::SX w = casadi::SX::sym("w", 3);             // angle velocity in body frame 3*1
     casadi::SX acc_z = casadi::SX::sym("acc_z", 1);             // motor thrust in body frame 4*1
+    casadi::SX disturbance = casadi::SX::sym("disturbance", 3); // world-frame acceleration disturbance
 
     /* total states and total inputs */
     casadi::SX x = casadi::SX::vertcat({p, v, q}); // x:10*1
@@ -52,9 +54,9 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
         v(0),
         v(1),
         v(2),
-        2*(q(0)*q(2) + q(1)*q(3))* acc_z,
-        2*(q(2)*q(3) - q(0)*q(1))* acc_z,
-        (q(0)*q(0) - q(1)*q(1) - q(2)*q(2) + q(3)*q(3))* acc_z- world_gravity_acc,
+        2*(q(0)*q(2) + q(1)*q(3))* acc_z + disturbance(0),
+        2*(q(2)*q(3) - q(0)*q(1))* acc_z + disturbance(1),
+        (q(0)*q(0) - q(1)*q(1) - q(2)*q(2) + q(3)*q(3))* acc_z- world_gravity_acc + disturbance(2),
         0.5*(-q(1)*w(0) - q(2)*w(1) - q(3)*w(2)),
         0.5*(q(0)*w(0) + q(2)*w(2) - q(3)*w(1)),
         0.5*(q(0)*w(1) - q(1)*w(2) + q(3)*w(0)),
@@ -62,14 +64,16 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
     }); // x_dot:13*1
 
     //定义模型函数
-    casadi::Function model_function = casadi::Function("f", {x, u}, {x_dot});
+    casadi::Function model_function = casadi::Function("f", {x, u, disturbance}, {x_dot});
 
     //求解问题符号表示
     casadi::SX U = casadi::SX::sym("U", NLP_input_num, NLP_predict_step);  //控制输入，本案例中为 4*(predict_step)
     casadi::SX X = casadi::SX::sym("X", NLP_state_num, NLP_predict_step + 1);  //状态输出，本案例中为 13*(predict_step+1)
 
     //优化问题所需参数 当前所有状态+期望轨迹点对应位置、速度、姿态、加速度+期望控制量 10+(1+predict_step)*10+predict_step*4
-    casadi::SX opt_param = casadi::SX::sym("opt_param", (NLP_predict_step + 2) * NLP_state_num + NLP_predict_step * NLP_input_num);
+    const int reference_parameter_count =
+        (NLP_predict_step + 2) * NLP_state_num + NLP_predict_step * NLP_input_num;
+    casadi::SX opt_param = casadi::SX::sym("opt_param", reference_parameter_count + 3);
     // std::cout << "SX 变量 opt_param:" << opt_param << std::endl;
 
     //优化变量 (predict_step*input_num)*1，从上到下分别为第一个控制量的predict_step步，第二个控制量的predict_step步，...，第input_num个控制量的predict_step步
@@ -87,6 +91,8 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
         // std::cout << "SX 变量 U_current:" << U_current << std::endl;
         input_X.push_back(X_current);
         input_X.push_back(U_current);
+        input_X.push_back(opt_param(casadi::Slice(reference_parameter_count,
+                                                   reference_parameter_count + 3, 1)));
         X(casadi::Slice(), i + 1) = model_function(input_X).at(0) * NLP_onestep_time + X_current;
     }
 
@@ -145,6 +151,30 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
     NLP_solver = nlpsol("solver", solver_name, nlp_problem, nlp_opts);
 }
 
+void NMPC_Ctrller_simple::configureDisturbanceObserver(
+    bool enabled,
+    const Eigen::Vector3d &bandwidth,
+    const Eigen::Vector3d &estimate_limit,
+    double gravity)
+{
+    disturbance_observer.configure(enabled, bandwidth, estimate_limit, gravity);
+}
+
+void NMPC_Ctrller_simple::resetDisturbanceObserver(const Eigen::Vector3d &velocity)
+{
+    disturbance_observer.reset(velocity);
+    collective_acceleration_command = world_gravity_acc;
+}
+
+void NMPC_Ctrller_simple::updateDisturbanceObserver(
+    const Eigen::Vector3d &velocity,
+    const Eigen::Quaterniond &attitude,
+    double dt)
+{
+    disturbance_observer.update(
+        velocity, attitude, collective_acceleration_command, dt);
+}
+
 NMPC_Ctrller_simple& NMPC_Ctrller_simple::operator=(const NMPC_Ctrller_simple& other)
 {
     if (this != &other)
@@ -161,6 +191,8 @@ NMPC_Ctrller_simple& NMPC_Ctrller_simple::operator=(const NMPC_Ctrller_simple& o
         NLP_costQ_quat = other.NLP_costQ_quat; //
         NLP_costR_w = other.NLP_costR_w; //
         NLP_costR_acc_z = other.NLP_costR_acc_z; //
+        collective_acceleration_command = other.collective_acceleration_command;
+        disturbance_observer = other.disturbance_observer;
     }
     return *this;
 }
@@ -211,6 +243,10 @@ void NMPC_Ctrller_simple::optimal_solution(std::vector<double> _current_states,
     {
         parameters.push_back(_desired_params[i]);
     }
+    const Eigen::Vector3d disturbance_estimate = disturbance_observer.estimate();
+    parameters.push_back(disturbance_estimate.x());
+    parameters.push_back(disturbance_estimate.y());
+    parameters.push_back(disturbance_estimate.z());
     // std::cout << parameters << std::endl;
 
     //求解参数设置
@@ -272,6 +308,7 @@ void NMPC_Ctrller_simple::optimal_solution(std::vector<double> _current_states,
 
     //控制序列的第一组作为当前控制量
     w_command << cmd_control_wx.front(), cmd_control_wy.front(), cmd_control_wz.front();
-    acc_z_command = thr_est.LSE(cmd_control_acc_z.front());
+    collective_acceleration_command = cmd_control_acc_z.front();
+    acc_z_command = thr_est.LSE(collective_acceleration_command);
     // std::cout << "acc_z_command: " << acc_z_command << std::endl;
 }

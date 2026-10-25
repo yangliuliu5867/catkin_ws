@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+  <arg name="mission_file" default="$(find real_flight_bringup)/config/mission.yaml" />
+  <arg name="goal_topic" default="/flight_waypoint_goal" />
+  <arg name="odom_topic" default="/visual_slam/odom" />
+  <arg name="remaining_time_topic" default="/trajectory_remaining_time" />
+  <arg name="trajectory_topic" default="/trajectory_generator_node/trajectory" />
+  <arg name="command_topic" default="/flight_waypoint_executor/command" />
+  <arg name="autostart" default="false" />
+  <arg name="start_index" default="0" />
+  <arg name="position_tolerance" default="0.20" />
+  <arg name="yaw_tolerance" default="0.20" />
+  <arg name="remaining_time_tolerance" default="0.25" />
+  <arg name="hold_time" default="0.5" />
+
+  <node pkg="real_flight_bringup" type="execute_flight_waypoints.py"
+        name="execute_flight_waypoints" output="screen">
+    <param name="mission_file" value="$(arg mission_file)" />
+    <param name="goal_topic" value="$(arg goal_topic)" />
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="remaining_time_topic" value="$(arg remaining_time_topic)" />
+    <param name="trajectory_topic" value="$(arg trajectory_topic)" />
+    <param name="command_topic" value="$(arg command_topic)" />
+    <param name="autostart" type="bool" value="$(arg autostart)" />
+    <param name="start_index" value="$(arg start_index)" />
+    <param name="position_tolerance" value="$(arg position_tolerance)" />
+    <param name="yaw_tolerance" value="$(arg yaw_tolerance)" />
+    <param name="remaining_time_tolerance" value="$(arg remaining_time_tolerance)" />
+    <param name="hold_time" value="$(arg hold_time)" />
+  </node>
+</launch>

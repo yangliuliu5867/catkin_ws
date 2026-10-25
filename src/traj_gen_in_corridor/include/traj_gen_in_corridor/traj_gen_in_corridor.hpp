@@ -43,6 +43,7 @@
 #include "quadrotor_msgs/PositionCommand.h"
 #include "quadrotor_msgs/TrajServerDebug.h"
 #include "quadrotor_msgs/TrajectoryPlan.h"
+#include "quadrotor_msgs/FlightWaypoint.h"
 
 // Utility: resolve relative data_ CSV paths to workspace-root/data_/filename
 static inline std::string ensureTrailingSlashLocalTG(std::string path)
@@ -80,6 +81,7 @@ private:
 
     ros::NodeHandle nh;
     ros::Subscriber targetSub;
+    ros::Subscriber flightWaypointSub;
     ros::Subscriber odomSub;
     ros::Subscriber corridorSub;
     ros::Subscriber intentionSub;
@@ -140,6 +142,9 @@ private:
 
     // yaw角目标存储
     std::vector<double> segment_yaw_targets;  // 每个段的目标yaw角序列
+    std::atomic<bool> has_waypoint_goal_yaw_{false};
+    std::atomic<double> waypoint_goal_yaw_{0.0};
+    std::atomic<double> current_odom_yaw_{0.0};
 
     // 碰撞事件存储和处理
     std::vector<collision_gcopter::CollisionEvent> collision_events_;
@@ -236,6 +241,9 @@ public:
         targetSub = nh.subscribe(config.targetTopic, 1,
                                  &GlobalPlanner::targetCallBack, this,
                                  ros::TransportHints().tcpNoDelay());
+        flightWaypointSub = nh.subscribe("/flight_waypoint_goal", 1,
+                                         &GlobalPlanner::flightWaypointCallBack, this,
+                                         ros::TransportHints().tcpNoDelay());
         corridorSub = nh.subscribe("corridor_list", 1,
                                    &GlobalPlanner::corridorCallback, this,
                                  ros::TransportHints().tcpNoDelay());
@@ -512,6 +520,15 @@ public:
         initialPos(0) = msg->pose.pose.position.x;
         initialPos(1) = msg->pose.pose.position.y;
         initialPos(2) = msg->pose.pose.position.z;
+        const auto &q = msg->pose.pose.orientation;
+        const double qnorm = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+        if (std::isfinite(qnorm) && qnorm > 1e-9)
+        {
+            const double x = q.x / qnorm, y = q.y / qnorm;
+            const double z = q.z / qnorm, w = q.w / qnorm;
+            current_odom_yaw_.store(std::atan2(2.0 * (w * z + x * y),
+                                                1.0 - 2.0 * (y * y + z * z)));
+        }
         odomInitialized.store(true);
     }
 
@@ -539,6 +556,7 @@ public:
 
     inline void targetCallBack(const geometry_msgs::PoseStamped::ConstPtr &msg)
     {
+        has_waypoint_goal_yaw_.store(false);
         finalPos(0) = msg->pose.position.x;
         finalPos(1) = msg->pose.position.y;
         finalPos(2) = std::max(msg->pose.position.z, 0.5);
@@ -556,6 +574,37 @@ public:
         }
     }
 
+    inline void flightWaypointCallBack(const quadrotor_msgs::FlightWaypoint::ConstPtr &msg)
+    {
+        if (!std::isfinite(msg->position.x) || !std::isfinite(msg->position.y) ||
+            !std::isfinite(msg->position.z) || !std::isfinite(msg->yaw) ||
+            (msg->flight_mode != quadrotor_msgs::FlightWaypoint::MODE_COLLISION_FREE &&
+             msg->flight_mode != quadrotor_msgs::FlightWaypoint::MODE_COLLISION))
+        {
+            ROS_ERROR("Rejecting invalid flight waypoint %u", msg->id);
+            return;
+        }
+        finalPos(0) = msg->position.x;
+        finalPos(1) = msg->position.y;
+        finalPos(2) = std::max(msg->position.z, 0.5);
+        goal_target_ = finalPos;
+        waypoint_goal_yaw_.store(std::atan2(std::sin(msg->yaw), std::cos(msg->yaw)));
+        has_waypoint_goal_yaw_.store(true);
+        has_goal_.store(true);
+        has_explicit_goal_.store(true);
+        last_goal_time_ = ros::Time::now();
+        targetInitialized.store(true);
+        ROS_INFO("Flight waypoint %u/%u target=(%.3f, %.3f, %.3f), mode=%u, yaw=%.3f rad",
+                 msg->id + 1, msg->total_waypoints, finalPos(0), finalPos(1), finalPos(2),
+                 static_cast<unsigned int>(msg->flight_mode), waypoint_goal_yaw_.load());
+        if (waiting_for_collision_data_.load() && has_collision_events_.load() &&
+            corridorInitialized.load())
+        {
+            waiting_for_collision_data_.store(false);
+            traj_generator();
+        }
+    }
+
     inline void genPolyTrajMsg(const Trajectory<TRAJ_ORDER> &traj,
                                const Eigen::Isometry3d &tfR2L,
                                const ros::Time &iniStamp,
@@ -563,6 +612,22 @@ public:
     {
         // 自动根据轨迹段数设置yaw角目标（如果尚未设置）
         int num_segments = traj.getPieceNum();
+        if (has_waypoint_goal_yaw_.load() && num_segments > 0)
+        {
+            const double yaw0 = current_odom_yaw_.load();
+            const double goal_yaw = waypoint_goal_yaw_.load();
+            const double delta = std::atan2(std::sin(goal_yaw - yaw0),
+                                            std::cos(goal_yaw - yaw0));
+            segment_yaw_targets.resize(num_segments + 1);
+            double elapsed = 0.0;
+            const double duration = std::max(1e-6, traj.getTotalDuration());
+            segment_yaw_targets[0] = yaw0;
+            for (int i = 0; i < num_segments; ++i)
+            {
+                elapsed += traj[i].getDuration();
+                segment_yaw_targets[i + 1] = yaw0 + delta * std::min(1.0, elapsed / duration);
+            }
+        }
         bool collision_yaw_mode = use_collision_optimization.load() && has_collision_events_.load() && !collision_events_.empty();
         double collision_time = collision_yaw_mode ? collision_events_.front().collision_time : -1.0;
         const double total_duration = traj.getTotalDuration();
@@ -720,6 +785,15 @@ public:
                     double max_delta = max_yaw_follow_rate * after_dur;
                     double clamped = std::max(-max_delta, std::min(max_delta, delta));
                     y1 = y_collision + clamped;
+                }
+
+                // Velocity-following is useful for collision recovery, but the
+                // last sample of a waypoint mission must still reach the yaw
+                // explicitly recorded for that waypoint.
+                if (has_waypoint_goal_yaw_.load() && p + 1 == (size_t)traj.getPieceNum())
+                {
+                    const double target = waypoint_goal_yaw_.load();
+                    y1 = y0 + unwrap(target - y0);
                 }
 
                 yaw_coeffs[0] = y0;

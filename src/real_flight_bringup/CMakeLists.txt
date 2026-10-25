@@ -38,6 +38,8 @@ catkin_install_python(PROGRAMS
   scripts/generate_static_map.py
   scripts/thrust_calibrate_nmpc.py
   scripts/rviz_goal_bridge.py
+  scripts/record_flight_waypoints.py
+  scripts/execute_flight_waypoints.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

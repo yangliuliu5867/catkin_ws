@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+  <!-- This launch only records waypoints. It does not arm or command the UAV. -->
+  <arg name="pose_topic" default="/mavros/local_position/pose" />
+  <arg name="pose_type" default="pose" />
+  <arg name="output_file" default="$(find real_flight_bringup)/config/flight_waypoints.yaml" />
+  <arg name="frame_id" default="world" />
+  <arg name="default_flight_mode" default="avoidance" />
+  <arg name="max_pose_age" default="1.0" />
+  <arg name="load_existing" default="true" />
+  <arg name="command_topic" default="/waypoint_recorder/command" />
+
+  <node pkg="real_flight_bringup" type="record_flight_waypoints.py"
+        name="record_flight_waypoints" output="screen" required="true">
+    <param name="pose_topic" value="$(arg pose_topic)" />
+    <param name="pose_type" value="$(arg pose_type)" />
+    <param name="output_file" value="$(arg output_file)" />
+    <param name="frame_id" value="$(arg frame_id)" />
+    <param name="default_flight_mode" value="$(arg default_flight_mode)" />
+    <param name="max_pose_age" value="$(arg max_pose_age)" />
+    <param name="load_existing" value="$(arg load_existing)" />
+    <!-- roslaunch has no reliable interactive stdin; control this node through command_topic. -->
+    <param name="interactive" value="false" />
+    <param name="command_topic" value="$(arg command_topic)" />
+  </node>
+</launch>

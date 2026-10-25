@@ -53,6 +53,7 @@ include_directories(
 add_executable(single_offboard_fsm
   src/single_offboard_fsm.cpp
   src/NMPC_Controller.cpp
+  src/nonlinear_disturbance_observer.cpp
 )
 target_link_libraries(single_offboard_fsm
   ${catkin_LIBRARIES}

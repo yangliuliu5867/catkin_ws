@@ -25,10 +25,13 @@
     <arg name="offboard_wait_timeout_sec" default="0.0" />
     <arg name="pre_align_timeout_sec" default="20.0" />
     <arg name="pre_align_cmd_topic" default="/position_command" />
+    <arg name="enable_waypoint_executor" default="true" />
+    <arg name="mission_file" default="$(find real_flight_bringup)/config/mission.yaml" />
+    <arg name="waypoint_autostart" default="false" />
 
     <!-- Global shared params -->
     <rosparam file="$(find real_flight_bringup)/config/vehicle.yaml" command="load" />
-    <rosparam file="$(find real_flight_bringup)/config/mission.yaml" command="load" />
+    <rosparam file="$(arg mission_file)" command="load" />
 
     <!-- 1) Point-LIO localization. -->
     <include file="$(find real_flight_bringup)/launch/localization.launch">
@@ -67,7 +70,7 @@
                 <param name="verbose_timing" value="$(arg verbose_timing)" />
         <param name="use_time_based_collision_end_trigger" value="$(arg use_time_based_collision_end_trigger)" />
         <rosparam file="$(find real_flight_bringup)/config/intention_real.yaml" command="load" />
-        <rosparam file="$(find real_flight_bringup)/config/mission.yaml" command="load" />
+        <rosparam file="$(arg mission_file)" command="load" />
         <param name="PointCloudUsePCD" type="bool" value="$(arg point_cloud_use_pcd)" />
         <param name="OnlineMapTopic" value="$(arg online_map_topic)" />
         <param name="OnlineMapUpdatePeriod" type="double" value="$(arg online_map_update_period)" />
@@ -99,6 +102,7 @@
     <!-- Goal trigger (endpoint is read from /SetPos in mission.yaml) -->
     <node if="$(arg enable_goal_publish)" pkg="real_flight_bringup" type="publish_goal_once.py"
           name="publish_goal_once" output="screen">
+        <param name="mission_mode_param" value="/Mission/mode" />
         <param name="setpos_param" value="/SetPos" />
         <param name="topic" value="/goal" />
         <param name="frame_id" value="world" />
@@ -130,6 +134,18 @@
         <param name="output_topic" value="/goal" />
         <param name="goal_z" value="$(arg rviz_goal_z)" />
         <param name="frame_id" value="world" />
+    </node>
+
+    <!-- Both goal publishers read Mission.mode; only the selected mode publishes. -->
+    <node if="$(arg enable_waypoint_executor)" pkg="real_flight_bringup"
+          type="execute_flight_waypoints.py" name="execute_flight_waypoints"
+          output="screen">
+        <param name="mission_file" value="$(arg mission_file)" />
+        <param name="goal_topic" value="/flight_waypoint_goal" />
+        <param name="odom_topic" value="/visual_slam/odom" />
+        <param name="remaining_time_topic" value="/trajectory_remaining_time" />
+        <param name="trajectory_topic" value="/trajectory_generator_node/trajectory" />
+        <param name="autostart" type="bool" value="$(arg waypoint_autostart)" />
     </node>
 
     <!-- Primary low-level controller: Jiangyin FSM + NMPC. cmd5 tracks /position_command. -->

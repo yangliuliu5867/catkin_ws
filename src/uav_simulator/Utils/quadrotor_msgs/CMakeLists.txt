@@ -91,6 +91,7 @@ add_message_files(
   PointSeq.msg
   MINCOTraj.msg
   TrajectoryPlan.msg
+  FlightWaypoint.msg
 )
 
 generate_messages(

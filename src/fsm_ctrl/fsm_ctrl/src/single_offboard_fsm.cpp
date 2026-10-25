@@ -21,6 +21,7 @@ sensor_msgs::Imu latest_imu;
 sensor_msgs::BatteryState latest_battery;
 Eigen::Vector3d local_position = Eigen::Vector3d::Zero();
 Eigen::Vector3d local_velocity = Eigen::Vector3d::Zero();
+ros::Time local_velocity_stamp;
 Eigen::Quaterniond local_attitude = Eigen::Quaterniond::Identity();
 quadrotor_msgs::PositionCommand planner_command;
 quadrotor_msgs::PositionCommandArray planner_horizon;
@@ -59,6 +60,7 @@ void PoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message)
 void VelocityCallback(const geometry_msgs::TwistStamped::ConstPtr &message)
 {
     local_velocity = Eigen::Vector3d(message->twist.linear.x, message->twist.linear.y, message->twist.linear.z);
+    local_velocity_stamp = message->header.stamp.isZero() ? ros::Time::now() : message->header.stamp;
     has_local_velocity = true;
 }
 
@@ -274,6 +276,9 @@ int main(int argc, char **argv)
     double xy_integral_limit = 0.10;
     double xy_integral_leak = 0.01;
     double xy_integral_max_error = 0.30;
+    bool ndob_enable = true;
+    double ndob_bandwidth_x = 2.0, ndob_bandwidth_y = 2.0, ndob_bandwidth_z = 3.0;
+    double ndob_limit_x = 3.0, ndob_limit_y = 3.0, ndob_limit_z = 6.0;
     private_node.param("nmpc_Qposx", qpx, qpx); private_node.param("nmpc_Qposy", qpy, qpy); private_node.param("nmpc_Qposz", qpz, qpz);
     private_node.param("nmpc_Qvelx", qvx, qvx); private_node.param("nmpc_Qvely", qvy, qvy); private_node.param("nmpc_Qvelz", qvz, qvz);
     private_node.param("nmpc_Qquatx", qqx, qqx); private_node.param("nmpc_Qquaty", qqy, qqy); private_node.param("nmpc_Qquatz", qqz, qqz);
@@ -290,10 +295,52 @@ int main(int argc, char **argv)
     private_node.param("nmpc_xy_integral_limit", xy_integral_limit, xy_integral_limit);
     private_node.param("nmpc_xy_integral_leak", xy_integral_leak, xy_integral_leak);
     private_node.param("nmpc_xy_integral_max_error", xy_integral_max_error, xy_integral_max_error);
+    private_node.param("nmpc_ndob_enable", ndob_enable, ndob_enable);
+    private_node.param("nmpc_ndob_bandwidth_x", ndob_bandwidth_x, ndob_bandwidth_x);
+    private_node.param("nmpc_ndob_bandwidth_y", ndob_bandwidth_y, ndob_bandwidth_y);
+    private_node.param("nmpc_ndob_bandwidth_z", ndob_bandwidth_z, ndob_bandwidth_z);
+    private_node.param("nmpc_ndob_limit_x", ndob_limit_x, ndob_limit_x);
+    private_node.param("nmpc_ndob_limit_y", ndob_limit_y, ndob_limit_y);
+    private_node.param("nmpc_ndob_limit_z", ndob_limit_z, ndob_limit_z);
     Eigen::Vector3f qpos(qpx, qpy, qpz), qvel(qvx, qvy, qvz);
     Eigen::Vector3f qquat(qqx, qqy, qqz), rw(rwx, rwy, rwz);
     NMPC_Ctrller_simple nmpc(0.02, {{0.0, 15.0}}, {{-3.14, 3.14}}, 8, 0.05,
         10, 4, qpos, qvel, qquat, rw, rthrust, hover_thrust);
+    nmpc.configureDisturbanceObserver(
+        ndob_enable,
+        Eigen::Vector3d(ndob_bandwidth_x, ndob_bandwidth_y, ndob_bandwidth_z),
+        Eigen::Vector3d(ndob_limit_x, ndob_limit_y, ndob_limit_z),
+        nmpc_gravity);
+    ROS_INFO("NMPC NDOB %s: bandwidth=[%.2f %.2f %.2f] rad/s, limits=[%.2f %.2f %.2f] m/s^2",
+             ndob_enable ? "enabled" : "disabled",
+             ndob_bandwidth_x, ndob_bandwidth_y, ndob_bandwidth_z,
+             ndob_limit_x, ndob_limit_y, ndob_limit_z);
+
+    ros::Time ndob_last_velocity_stamp;
+    const auto reset_ndob = [&]() {
+        nmpc.resetDisturbanceObserver(local_velocity);
+        ndob_last_velocity_stamp = local_velocity_stamp;
+    };
+    const auto update_ndob = [&]() {
+        if (local_velocity_stamp.isZero())
+        {
+            return;
+        }
+        if (ndob_last_velocity_stamp.isZero())
+        {
+            nmpc.resetDisturbanceObserver(local_velocity);
+            ndob_last_velocity_stamp = local_velocity_stamp;
+            return;
+        }
+        if (local_velocity_stamp <= ndob_last_velocity_stamp)
+        {
+            return;
+        }
+        nmpc.updateDisturbanceObserver(
+            local_velocity, local_attitude,
+            (local_velocity_stamp - ndob_last_velocity_stamp).toSec());
+        ndob_last_velocity_stamp = local_velocity_stamp;
+    };
     const auto publish_nmpc_state = [&](const std::vector<double> &desired) {
         fsm_ctrl::nmpc_state message;
         constexpr int kPredictionNodes = 9;
@@ -325,6 +372,11 @@ int main(int argc, char **argv)
         message.attitude_ref.y = desired[8];
         message.attitude_ref.z = desired[9];
         message.target = attitude_setpoint;
+        const Eigen::Vector3d disturbance = nmpc.getDisturbanceEstimate();
+        message.disturbance_accel.x = disturbance.x();
+        message.disturbance_accel.y = disturbance.y();
+        message.disturbance_accel.z = disturbance.z();
+        message.ndob_active = nmpc.isDisturbanceObserverEnabled();
         nmpc_state_publisher.publish(message);
     };
     const auto publish_safe_attitude = [&]() {
@@ -359,6 +411,7 @@ int main(int argc, char **argv)
             local_position.x(), local_position.y(), local_position.z(),
             local_velocity.x(), local_velocity.y(), local_velocity.z(),
             local_attitude.w(), local_attitude.x(), local_attitude.y(), local_attitude.z()};
+        update_ndob();
         try
         {
             nmpc.optimal_solution(current, desired);
@@ -388,6 +441,10 @@ int main(int argc, char **argv)
         attitude_setpoint.thrust = std::max(0.0, std::min(1.0, thrust));
         attitude_publisher.publish(attitude_setpoint);
         publish_nmpc_state(desired);
+        const Eigen::Vector3d disturbance = nmpc.getDisturbanceEstimate();
+        ROS_INFO_THROTTLE(1.0,
+                          "NMPC NDOB disturbance [m/s^2]: x=%+.3f y=%+.3f z=%+.3f",
+                          disturbance.x(), disturbance.y(), disturbance.z());
 
         quadrotor_msgs::Px4ctrlDebug debug;
         debug.header.stamp = attitude_setpoint.header.stamp;
@@ -665,6 +722,18 @@ int main(int argc, char **argv)
         command_state_publisher.publish(command_state);
         if (active_command != previous_command)
         {
+            const bool was_nmpc_active =
+                previous_command == 3 || previous_command == 5 || previous_command == 7;
+            const bool is_nmpc_active =
+                active_command == 3 || active_command == 5 || active_command == 7;
+            if (!was_nmpc_active && is_nmpc_active)
+            {
+                reset_ndob();
+            }
+            else if (was_nmpc_active && !is_nmpc_active)
+            {
+                reset_ndob();
+            }
             trajectory_step = 0;
             reset_xy_integral();
             if (active_command == 5)

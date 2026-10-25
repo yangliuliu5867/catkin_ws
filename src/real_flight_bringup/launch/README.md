@@ -118,7 +118,8 @@ roslaunch real_flight_bringup real_flight_step1.launch \
 
 常用参数：
 
-- `enable_goal_publish:=true`：自动发送 `mission.yaml` 中的目标点；
+- `enable_goal_publish:=true`：当`Mission.mode: single`时自动发送`mission.yaml`中的`SetPos`；
+- `enable_waypoint_executor:=true`：当`Mission.mode: multi`时读取`Mission.waypoints`并依次执行；
 - `enable_rviz_goal:=true`：接收RViz的`/move_base_simple/goal`并转发给规划器；
 - `rviz_goal_z:=1.0`：RViz点击目标使用的固定高度；
 - `point_cloud_use_pcd:=false`：默认在线地图；改成 `true` 可回到原静态 PCD；
@@ -232,6 +233,138 @@ roslaunch real_flight_bringup collision_planning_preview.launch
 
 它用于检查规划结果、碰撞切换和曲线，不是实飞入口。
 
+## 航点打点程序
+
+`record_flight_waypoints.py`参考Jiangyin2026的实机打点流程，从定位姿态中同时记录：
+
+- 世界坐标系XYZ；
+- yaw角，文件中统一使用弧度；
+- 飞行模式：`avoidance`（避碰）或`collision`（计划碰撞）；
+- 与`quadrotor_msgs/TrajectoryPlan`一致的数值模式：避碰为1，碰撞为2；
+
+程序只读取定位并写文件，不会解锁、切换OFFBOARD或向飞机发布控制指令。推荐在可交互终端中运行：
+
+打点只写入`/Users/yyx/Documents/catkin_ws/src/real_flight_bringup/config/flight_waypoints.yaml`。
+实际执行始终读取`config/mission.yaml`。打点完成后，由操作者把记录文件的`waypoints`
+列表手工复制到`mission.yaml`的`Mission.waypoints`下。
+
+```bash
+rosrun real_flight_bringup record_flight_waypoints.py \
+  _pose_topic:=/mavros/local_position/pose \
+  _pose_type:=pose
+```
+
+如果希望直接读取项目规划定位，也可以使用里程计：
+
+```bash
+rosrun real_flight_bringup record_flight_waypoints.py \
+  _pose_topic:=/visual_slam/odom \
+  _pose_type:=odometry
+```
+
+### 在mission.yaml选择单点或多点
+
+`config/mission.yaml`是最终执行文件。原有`SetPos`、`SetAtt`仍供单点任务使用：
+
+```yaml
+Mission:
+  mode: single
+  frame_id: world
+  waypoints: []
+SetPos: [0.0, 3.5, 1.40]
+SetAtt: [0.0, 0.0, 1.0, 0.0]
+```
+
+多点任务把`mode`改为`multi`，并将`flight_waypoints.yaml`中的列表项复制到
+`Mission.waypoints`。每个点保留`id`、`flight_mode`、`trajectory_mode`、XYZ和yaw，
+编号从0连续递增。`Mission.frame_id`也要与打点文件一致。例如：
+
+```yaml
+Mission:
+  mode: multi
+  frame_id: world
+  waypoints:
+    - id: 0
+      flight_mode: avoidance
+      trajectory_mode: 1
+      x: 0.0
+      y: 1.0
+      z: 1.0
+      yaw: 0.0
+```
+
+示例坐标仅展示格式，实飞前应替换为实际打点结果。修改`mission.yaml`后重新启动
+`real_flight_step1.launch`，因为执行器在启动时读取任务。`single`使用原`SetPos`
+发布目标；`multi`由执行器顺序发布列表中的每个点，两种模式不会同时自动发布目标。
+
+### 依次执行多点任务
+
+航点执行器通过新的`quadrotor_msgs/FlightWaypoint`消息发布每个点，因此XYZ、yaw和
+`avoidance/collision`模式会在同一次目标更新中送到前端规划器和轨迹生成器：
+
+```text
+mission.yaml / Mission.waypoints
+  -> /flight_waypoint_goal (XYZ + mode + yaw)
+  -> intention_get_corridor (按点选择避碰或计划碰撞)
+  -> traj_gen_in_corridor (生成位置轨迹和终点yaw)
+  -> polytraj_poscmd_bridge -> NMPC
+```
+
+完整实飞入口默认根据`Mission.mode`选择单点或多点。建议关闭RViz手动目标，避免覆盖任务：
+
+```bash
+roslaunch real_flight_bringup real_flight_step1.launch \
+  enable_rviz_goal:=false
+```
+
+为安全起见默认不自动开始。飞机已解锁、进入OFFBOARD，并在`cmd 5`轨迹跟踪状态后执行：
+
+```bash
+rostopic pub -1 /flight_waypoint_executor/command std_msgs/String "data: 'start'"
+```
+
+执行器只有在以下条件持续满足0.5秒后才发送下一点：XYZ误差不超过0.20米、yaw误差
+不超过0.20弧度、`/trajectory_remaining_time`不超过0.25秒。状态可查看：
+
+```bash
+rostopic echo /execute_flight_waypoints/status
+```
+
+控制命令包括`start`、`pause`、`resume`、`retry`、`next`、`stop`和`status`。其中
+`pause/stop`只停止航点序列推进，不会替代飞控的悬停/停止命令；需要停机或悬停仍应使用
+现有FSM命令。也可单独启动执行器：
+
+```bash
+roslaunch real_flight_bringup execute_flight_waypoints.launch
+```
+
+单点`/goal`保持原项目“先计划碰撞、碰撞结束后再避碰到终点”的流程；多点
+`/flight_waypoint_goal`按每个航点的模式选择规划流程。飞行速度由MINCO优化及
+`traj_gen_real.yaml`中的`MaxVelRate`等约束决定，航点文件不设置逐点速度。
+
+交互命令与Jiangyin2026的打点方式一致：
+
+```text
+Enter / a    记录当前位置XYZ和当前yaw
+1            后续航点使用避碰模式
+2            后续航点使用计划碰撞模式
+u            撤销上一个点
+s            保存
+q            保存并退出
+```
+
+也可使用`record_flight_waypoints.launch`非交互启动，再通过话题发送同样的命令：
+
+```bash
+roslaunch real_flight_bringup record_flight_waypoints.launch
+rostopic pub -1 /waypoint_recorder/command std_msgs/String "data: '2'"
+rostopic pub -1 /waypoint_recorder/command std_msgs/String "data: 'a'"
+```
+
+输出采用临时文件加原子替换，断电或进程异常时不会留下只写了一半的YAML。再次启动默认读取
+已有文件并继续追加。原始打点保存在`config/flight_waypoints.yaml`，最终任务保存在
+`config/mission.yaml`。打点文件不直接执行。
+
 ## 控制指令与调试话题
 
 状态机 UDP 端口为 `12001`。主流程使用：
@@ -247,6 +380,7 @@ roslaunch real_flight_bringup collision_planning_preview.launch
 
 - `/debugPx4ctrl`：兼容原 PlotJuggler 配置的 NMPC 调试消息；
 - `/nmpc_state`：NMPC 预测时域、参考状态和反馈；
+  其中`disturbance_accel`为NDOB估计的世界系等效加速度扰动；
 - `/position_command_horizon`：轨迹桥接器按0.05秒间隔发布的9个真实未来参考点；
 - `/visual_slam/odom`：实际定位轨迹；
 - `/position_command`：规划器当前期望状态；
