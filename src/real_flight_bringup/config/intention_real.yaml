@@ -27,6 +27,17 @@ MaxVelocity: 5.0
 MaxAcceleration: 10.0
 GoalTolerance: 0.5
 
+# Only used by waypoints explicitly tagged grasp_target: true. The direct
+# approach is published only if the raw cloud clears the entire body envelope.
+GraspApproach:
+  body_radius_xy: 0.29
+  body_below_m: 0.10
+  body_above_m: 0.10
+  safety_margin_m: 0.03
+  corridor_half_width_m: 0.06
+  corridor_z_margin_m: 0.02
+  max_direct_distance_m: 3.0
+
 CollisionModel:
   friction: 0.65
   damping_ratio: 0.10

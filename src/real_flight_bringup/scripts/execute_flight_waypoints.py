@@ -67,6 +67,13 @@ def load_waypoints(path):
                 raise ValueError("{} waypoint {} mode fields conflict".format(
                     segment_name, index))
             point = {"id": index, "mode_name": mode_name, "mode": mode}
+            point["grasp_target"] = raw.get("grasp_target", False)
+            if not isinstance(point["grasp_target"], bool):
+                raise ValueError("{} waypoint {} grasp_target must be true or false".format(
+                    segment_name, index))
+            if point["grasp_target"] and mode_name != "avoidance":
+                raise ValueError("{} waypoint {} grasp_target requires avoidance mode".format(
+                    segment_name, index))
             for field in ("x", "y", "z", "yaw"):
                 point[field] = float(raw[field])
                 if not math.isfinite(point[field]):
@@ -188,6 +195,7 @@ class FlightWaypointExecutor:
         message.position.x = point["x"]
         message.position.y = point["y"]
         message.position.z = point["z"]
+        message.grasp_target = point["grasp_target"]
         message.flight_mode = point["mode"]
         message.yaw = point["yaw"]
         self._goal_stamp = message.header.stamp

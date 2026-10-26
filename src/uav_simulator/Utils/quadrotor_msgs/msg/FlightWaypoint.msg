@@ -10,3 +10,4 @@ uint32 total_waypoints
 geometry_msgs/Point position
 uint8 flight_mode
 float64 yaw
+bool grasp_target

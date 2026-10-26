@@ -233,6 +233,14 @@ private:
     Eigen::Vector3d latest_goal_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d current_traj_goal_{Eigen::Vector3d::Zero()};
     std::atomic<int> latest_goal_mode_{quadrotor_msgs::FlightWaypoint::MODE_UNSET};
+    std::atomic<bool> grasp_goal_active_{false};
+    double grasp_body_radius_xy_{0.29};
+    double grasp_body_below_m_{0.10};
+    double grasp_body_above_m_{0.10};
+    double grasp_margin_m_{0.03};
+    double grasp_corridor_half_width_m_{0.06};
+    double grasp_corridor_z_margin_m_{0.02};
+    double grasp_max_direct_distance_m_{3.0};
     std::atomic<uint32_t> latest_goal_id_{std::numeric_limits<uint32_t>::max()};
     std::atomic<bool> has_requested_goal_yaw_{false};
     std::atomic<double> requested_goal_yaw_{0.0};
@@ -730,6 +738,14 @@ public:
         nh.param("special_scene_post_collision_wait_sec",
                  special_scene_post_collision_wait_sec_,
                  special_scene_post_collision_wait_sec_);
+        ros::NodeHandle pnh("~");
+        pnh.param("GraspApproach/body_radius_xy", grasp_body_radius_xy_, grasp_body_radius_xy_);
+        pnh.param("GraspApproach/body_below_m", grasp_body_below_m_, grasp_body_below_m_);
+        pnh.param("GraspApproach/body_above_m", grasp_body_above_m_, grasp_body_above_m_);
+        pnh.param("GraspApproach/safety_margin_m", grasp_margin_m_, grasp_margin_m_);
+        pnh.param("GraspApproach/corridor_half_width_m", grasp_corridor_half_width_m_, grasp_corridor_half_width_m_);
+        pnh.param("GraspApproach/corridor_z_margin_m", grasp_corridor_z_margin_m_, grasp_corridor_z_margin_m_);
+        pnh.param("GraspApproach/max_direct_distance_m", grasp_max_direct_distance_m_, grasp_max_direct_distance_m_);
         special_scene_stage_.store(static_cast<int>(SpecialSceneReplanStage::Disabled));
         ROS_WARN("Two-stage fixed-scene replan mode enabled for scene_real_model.xml");
     }
@@ -2709,7 +2725,8 @@ private:
                                   uint8_t flight_mode,
                                   uint32_t waypoint_id,
                                   bool has_yaw,
-                                  double yaw)
+                                  double yaw,
+                                  bool grasp_target = false)
     {
         static int seq = 0;
         if (!odomInitialized.load())
@@ -2753,6 +2770,8 @@ private:
         }
         latest_goal_mode_.store(flight_mode);
         latest_goal_id_.store(waypoint_id);
+        grasp_goal_active_.store(grasp_target &&
+            flight_mode == quadrotor_msgs::FlightWaypoint::MODE_COLLISION_FREE);
         has_requested_goal_yaw_.store(has_yaw && std::isfinite(yaw));
         if (has_yaw && std::isfinite(yaw)) requested_goal_yaw_.store(yaw);
         has_active_goal_.store(true);
@@ -2765,9 +2784,10 @@ private:
         suppress_time_replan_until_sec_.store(0.0);
         resetSpecialSceneStateForNewGoal(flight_mode);
 
-        ROS_INFO("Accepted mission waypoint id=%u mode=%u xyz=(%.3f, %.3f, %.3f)%s",
+        ROS_INFO("Accepted mission waypoint id=%u mode=%u xyz=(%.3f, %.3f, %.3f)%s%s",
                  waypoint_id, static_cast<unsigned int>(flight_mode),
-                 target.x(), target.y(), target.z(), has_yaw ? " with yaw" : "");
+                 target.x(), target.y(), target.z(), has_yaw ? " with yaw" : "",
+                 grasp_goal_active_.load() ? " grasp target" : "");
 
         plan_msg.header.seq = ++seq;
         // The legacy PCD seed comes from SetPos/SetAtt. A mode-aware mission
@@ -2797,12 +2817,131 @@ private:
             return;
         }
         Eigen::Vector3d target(msg->position.x, msg->position.y, msg->position.z);
-        handleMissionGoal(target, msg->flight_mode, msg->id, true, msg->yaw);
+        handleMissionGoal(target, msg->flight_mode, msg->id, true, msg->yaw,
+                          msg->grasp_target);
+    }
+
+    // The recorded grasp pose is physically reachable by the aircraft body but
+    // lies inside the generic 3-D inflated map because the gripper contacts an
+    // object below it. Only an explicitly tagged waypoint may use this route.
+    inline void planGraspApproach()
+    {
+        nav_msgs::Odometry odom_local;
+        Eigen::Vector3d goal;
+        {
+            std::lock(odom_mutex_, status_mutex_);
+            std::lock_guard<std::mutex> odom_lock(odom_mutex_, std::adopt_lock);
+            std::lock_guard<std::mutex> status_lock(status_mutex_, std::adopt_lock);
+            odom_local = odom;
+            goal = latest_goal_;
+        }
+        const Eigen::Vector3d start(odom_local.pose.pose.position.x,
+                                    odom_local.pose.pose.position.y,
+                                    odom_local.pose.pose.position.z);
+        const auto raw_cloud = std::atomic_load(&raw_collision_cloud_);
+        const uint64_t map_version = online_map_version_.load();
+        if (!odomInitialized.load() || !start.allFinite() || !goal.allFinite() ||
+            !raw_cloud || raw_cloud->size() < 100 ||
+            !std::isfinite(grasp_body_radius_xy_) || !std::isfinite(grasp_body_below_m_) ||
+            !std::isfinite(grasp_body_above_m_) || !std::isfinite(grasp_margin_m_) ||
+            !std::isfinite(grasp_corridor_half_width_m_) ||
+            !std::isfinite(grasp_corridor_z_margin_m_) ||
+            !std::isfinite(grasp_max_direct_distance_m_) ||
+            grasp_body_radius_xy_ <= 0.0 || grasp_body_below_m_ <= 0.0 ||
+            grasp_body_above_m_ <= 0.0 || grasp_margin_m_ < 0.0 ||
+            grasp_corridor_half_width_m_ <= 0.0 || grasp_corridor_z_margin_m_ < 0.0 ||
+            grasp_max_direct_distance_m_ <= 0.0 ||
+            (goal - start).norm() > grasp_max_direct_distance_m_)
+        {
+            ROS_WARN_THROTTLE(2.0, "Grasp approach rejected: map, odometry, geometry, or direct range unavailable");
+            return;
+        }
+
+        Eigen::Vector3d along = goal - start;
+        along.z() = 0.0;
+        const double xy_length = along.head<2>().norm();
+        if (xy_length > 1e-6)
+            along /= xy_length;
+        else
+            along = Eigen::Vector3d::UnitX();
+        const Eigen::Vector3d side(-along.y(), along.x(), 0.0);
+        const double body_xy = grasp_body_radius_xy_ + grasp_corridor_half_width_m_ + grasp_margin_m_;
+        const double body_z_min = std::min(start.z(), goal.z()) -
+            grasp_corridor_z_margin_m_ - grasp_body_below_m_ - grasp_margin_m_;
+        const double body_z_max = std::max(start.z(), goal.z()) +
+            grasp_corridor_z_margin_m_ + grasp_body_above_m_ + grasp_margin_m_;
+        int target_evidence = 0;
+        for (const auto &point : raw_cloud->points)
+        {
+            if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+                continue;
+            const Eigen::Vector3d obstacle(point.x, point.y, point.z);
+            const Eigen::Vector3d from_start = obstacle - start;
+            const double progress = std::max(0.0, std::min(xy_length, from_start.dot(along)));
+            const Eigen::Vector3d nearest = start + along * progress;
+            const double lateral = (obstacle.head<2>() - nearest.head<2>()).norm();
+            if (lateral < body_xy && obstacle.z() >= body_z_min && obstacle.z() <= body_z_max)
+            {
+                ROS_WARN_THROTTLE(2.0, "Grasp approach blocked by raw point (%.2f, %.2f, %.2f)",
+                                  point.x, point.y, point.z);
+                return;
+            }
+            const double target_xy = (obstacle.head<2>() - goal.head<2>()).norm();
+            const double target_drop = goal.z() - obstacle.z();
+            if (target_xy < 0.30 && target_drop > 0.13 && target_drop < 0.35)
+                ++target_evidence;
+        }
+        if (target_evidence < 3 || map_version != online_map_version_.load())
+        {
+            ROS_WARN_THROTTLE(2.0, "Grasp approach rejected: target evidence missing or map changed");
+            return;
+        }
+
+        Eigen::Matrix<double, 6, -1> corridor(6, 6);
+        auto face = [&](int index, const Eigen::Vector3d &normal, const Eigen::Vector3d &point) {
+            corridor.block<3, 1>(0, index) = normal;
+            corridor.block<3, 1>(3, index) = point;
+        };
+        face(0, -along, start - along * 0.10);
+        face(1, along, goal + along * 0.10);
+        face(2, side, start + side * grasp_corridor_half_width_m_);
+        face(3, -side, start - side * grasp_corridor_half_width_m_);
+        face(4, Eigen::Vector3d::UnitZ(),
+             Eigen::Vector3d(start.x(), start.y(), std::max(start.z(), goal.z()) + grasp_corridor_z_margin_m_));
+        face(5, -Eigen::Vector3d::UnitZ(),
+             Eigen::Vector3d(start.x(), start.y(), std::min(start.z(), goal.z()) - grasp_corridor_z_margin_m_));
+
+        quadrotor_msgs::TrajectoryPlan plan = sample_forward::makeTwoPointMinJerkPlan(
+            start, goal, along, quadrotor_msgs::TrajectoryPlan::MODE_COLLISION_FREE);
+        if (plan.waypoints.size() < 2 || map_version != online_map_version_.load())
+            return;
+        if (has_requested_goal_yaw_.load() && !plan.headings.empty())
+        {
+            plan.headings.back().x = std::cos(requested_goal_yaw_.load());
+            plan.headings.back().y = std::sin(requested_goal_yaw_.load());
+            plan.headings.back().z = 0.0;
+        }
+        const std::vector<Eigen::Matrix<double, 6, -1>> grasp_corridor{corridor};
+        pubCorridor(grasp_corridor, false);
+        keyPosPub.publish(plan);
+        intentionPub.publish(plan);
+        {
+            std::lock_guard<std::mutex> lk(status_mutex_);
+            current_traj_goal_ = goal;
+        }
+        special_scene_stage_.store(static_cast<int>(SpecialSceneReplanStage::Completed));
+        ROS_INFO("Publishing raw-map-checked grasp approach: %.2fm, target evidence=%d",
+                 (goal - start).norm(), target_evidence);
     }
 
     void getCorridorFromSetPos(quadrotor_msgs::TrajectoryPlan &plan_msg, const Eigen::Matrix3Xd & /*key_pos*/)
     {
         (void)plan_msg;
+        if (grasp_goal_active_.load())
+        {
+            planGraspApproach();
+            return;
+        }
         const uint64_t planning_map_version = online_map_version_.load();
 
         if (!ensureGlobalAstarPathAndFullCorridorBuilt())
