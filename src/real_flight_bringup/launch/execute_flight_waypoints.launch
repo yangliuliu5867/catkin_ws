@@ -6,7 +6,7 @@
   <arg name="remaining_time_topic" default="/trajectory_remaining_time" />
   <arg name="trajectory_topic" default="/trajectory_generator_node/trajectory" />
   <arg name="command_topic" default="/flight_waypoint_executor/command" />
-  <arg name="autostart" default="false" />
+  <arg name="fsm_command_topic" default="/fsm_ctrl/command" />
   <arg name="start_index" default="0" />
   <arg name="position_tolerance" default="0.20" />
   <arg name="yaw_tolerance" default="0.20" />
@@ -21,7 +21,7 @@
     <param name="remaining_time_topic" value="$(arg remaining_time_topic)" />
     <param name="trajectory_topic" value="$(arg trajectory_topic)" />
     <param name="command_topic" value="$(arg command_topic)" />
-    <param name="autostart" type="bool" value="$(arg autostart)" />
+    <param name="fsm_command_topic" value="$(arg fsm_command_topic)" />
     <param name="start_index" value="$(arg start_index)" />
     <param name="position_tolerance" value="$(arg position_tolerance)" />
     <param name="yaw_tolerance" value="$(arg yaw_tolerance)" />

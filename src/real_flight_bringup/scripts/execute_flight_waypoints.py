@@ -9,7 +9,7 @@ import rospkg
 import rospy
 import yaml
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float64, String
+from std_msgs.msg import Float64, Int32, String
 from quadrotor_msgs.msg import FlightWaypoint, PolynomialTrajectory
 
 
@@ -85,6 +85,8 @@ class FlightWaypointExecutor:
             "~trajectory_topic", "/trajectory_generator_node/trajectory")
         self._command_topic = rospy.get_param(
             "~command_topic", "/flight_waypoint_executor/command")
+        self._fsm_command_topic = rospy.get_param(
+            "~fsm_command_topic", "/fsm_ctrl/command")
         self._position_tolerance = float(rospy.get_param("~position_tolerance", 0.20))
         self._yaw_tolerance = float(rospy.get_param("~yaw_tolerance", 0.20))
         self._remaining_tolerance = float(rospy.get_param("~remaining_time_tolerance", 0.25))
@@ -108,6 +110,7 @@ class FlightWaypointExecutor:
         self._goal_stamp = rospy.Time()
         self._within_since = None
         self._trajectory_received = False
+        self._fsm_command = None
 
         self._goal_pub = rospy.Publisher(
             self._goal_topic, FlightWaypoint, queue_size=1, latch=True)
@@ -122,11 +125,12 @@ class FlightWaypointExecutor:
             self._trajectory_callback, queue_size=10)
         self._command_sub = rospy.Subscriber(
             self._command_topic, String, self._command_callback, queue_size=10)
+        self._fsm_command_sub = rospy.Subscriber(
+            self._fsm_command_topic, Int32, self._fsm_command_callback,
+            queue_size=10)
         self._timer = rospy.Timer(rospy.Duration(0.1), self._timer_callback)
         self._publish_status("loaded {} waypoint(s) from {}".format(
             len(self._points), mission_file))
-        if bool(rospy.get_param("~autostart", False)):
-            self._start()
 
     def _publish_status(self, detail=""):
         text = "state={} index={}/{}".format(
@@ -175,21 +179,41 @@ class FlightWaypointExecutor:
             "published mode={} xyz=({:.3f},{:.3f},{:.3f}) yaw={:.3f}".format(
                 point["mode_name"], point["x"], point["y"], point["z"], point["yaw"]))
 
-    def _start(self):
+    def _start_locked(self):
+        if self._fsm_command != 5:
+            self._publish_status("waiting for FSM cmd 5 before starting")
+            return
+        if self._state == "COMPLETE":
+            self._index = 0
+        if self._odom is None:
+            self._state = "WAITING_ODOM"
+            self._publish_status("waiting for odometry before publishing")
+        else:
+            self._state = "RUNNING"
+            self._publish_current_goal()
+
+    def _fsm_command_callback(self, message):
         with self._lock:
-            if self._state == "COMPLETE":
+            if message.data == self._fsm_command:
+                return
+            previous_command = self._fsm_command
+            self._fsm_command = message.data
+            if message.data == 5:
                 self._index = 0
-            if self._odom is None:
-                self._state = "WAITING_ODOM"
-                self._publish_status("waiting for odometry before publishing")
-            else:
-                self._state = "RUNNING"
-                self._publish_current_goal()
+                self._start_locked()
+            elif previous_command == 5:
+                self._state = "IDLE"
+                self._index = 0
+                self._remaining = None
+                self._within_since = None
+                self._trajectory_received = False
+                self._publish_status("FSM left cmd 5; waypoint sequence stopped")
 
     def _command_callback(self, message):
         command = message.data.strip().lower()
         if command in ("start", "resume"):
-            self._start()
+            with self._lock:
+                self._start_locked()
         elif command == "pause":
             with self._lock:
                 self._state = "PAUSED"

@@ -27,7 +27,6 @@
     <arg name="pre_align_cmd_topic" default="/position_command" />
     <arg name="enable_waypoint_executor" default="true" />
     <arg name="mission_file" default="$(find real_flight_bringup)/config/mission.yaml" />
-    <arg name="waypoint_autostart" default="false" />
 
     <!-- Global shared params -->
     <rosparam file="$(find real_flight_bringup)/config/vehicle.yaml" command="load" />
@@ -145,7 +144,7 @@
         <param name="odom_topic" value="/visual_slam/odom" />
         <param name="remaining_time_topic" value="/trajectory_remaining_time" />
         <param name="trajectory_topic" value="/trajectory_generator_node/trajectory" />
-        <param name="autostart" type="bool" value="$(arg waypoint_autostart)" />
+        <param name="fsm_command_topic" value="/fsm_ctrl/command" />
     </node>
 
     <!-- Primary low-level controller: Jiangyin FSM + NMPC. cmd5 tracks /position_command. -->

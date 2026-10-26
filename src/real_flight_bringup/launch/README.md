@@ -318,11 +318,10 @@ roslaunch real_flight_bringup real_flight_step1.launch \
   enable_rviz_goal:=false
 ```
 
-为安全起见默认不自动开始。飞机已解锁、进入OFFBOARD，并在`cmd 5`轨迹跟踪状态后执行：
-
-```bash
-rostopic pub -1 /flight_waypoint_executor/command std_msgs/String "data: 'start'"
-```
+`Mission.mode: multi`时，进入`cmd 5`会自动发布第0个航点，无需再发送`start`；
+离开`cmd 5`会停止航点序列，再次进入则从第0个航点重新执行。
+`Mission.mode: single`仍由原`SetPos`单点流程发布目标。
+实际飞行前应确认`Mission.waypoints`的坐标系和高度正确。
 
 执行器只有在以下条件持续满足0.5秒后才发送下一点：XYZ误差不超过0.20米、yaw误差
 不超过0.20弧度、`/trajectory_remaining_time`不超过0.25秒。状态可查看：
@@ -331,7 +330,8 @@ rostopic pub -1 /flight_waypoint_executor/command std_msgs/String "data: 'start'
 rostopic echo /execute_flight_waypoints/status
 ```
 
-控制命令包括`start`、`pause`、`resume`、`retry`、`next`、`stop`和`status`。其中
+控制命令包括`start`、`pause`、`resume`、`retry`、`next`、`stop`和`status`；
+`start/resume`仅在`cmd 5`下有效。正常进入`cmd 5`已自动开始，无需手工发送。
 `pause/stop`只停止航点序列推进，不会替代飞控的悬停/停止命令；需要停机或悬停仍应使用
 现有FSM命令。也可单独启动执行器：
 
