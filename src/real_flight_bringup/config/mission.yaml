@@ -1,27 +1,30 @@
 # Final flight mission. Mission.mode selects the active goal source:
-# single = original SetPos -> /goal flow; multi = Mission.waypoints sequence.
+# single = original SetPos -> /goal flow; multi = cmd5/cmd6 waypoint segments.
 # For multi mode, manually copy the recorded waypoints from flight_waypoints.yaml
-# into Mission.waypoints, keeping their id, flight_mode, XYZ and yaw fields.
+# into Mission.segments.cmd5 or cmd6. Number ids from 0 within each segment.
+# cmd5 flies the first segment; cmd6 flies the second segment.
 # The start point is always current odometry at trigger time.
 
 Mission:
   mode: multi
   frame_id: world
-  waypoints:
-    - id: 0
-      flight_mode: avoidance
-      trajectory_mode: 1
-      x: 1.0
-      y: 0.0
-      z: 1.4
-      yaw: 0.0
-    - id: 1
-      flight_mode: avoidance
-      trajectory_mode: 1
-      x: 2.0
-      y: 1.0
-      z: 0.8
-      yaw: 0.0
+  segments:
+    cmd5:
+      - id: 0
+        flight_mode: avoidance
+        trajectory_mode: 1
+        x: 1.0
+        y: 0.0
+        z: 1.4
+        yaw: 0.0
+    cmd6:
+      - id: 0
+        flight_mode: avoidance
+        trajectory_mode: 1
+        x: 2.0
+        y: 1.0
+        z: 0.8
+        yaw: 0.0
 
 
 SetPos: [0.0, 3.5, 1.40]

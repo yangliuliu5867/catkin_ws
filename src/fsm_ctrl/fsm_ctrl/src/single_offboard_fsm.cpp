@@ -198,8 +198,10 @@ int main(int argc, char **argv)
 
     std::string planner_command_topic = "/position_command";
     std::string planner_horizon_topic = "/position_command_horizon";
+    std::string mission_mode = "single";
     private_node.param("planner_command_topic", planner_command_topic, planner_command_topic);
     private_node.param("planner_horizon_topic", planner_horizon_topic, planner_horizon_topic);
+    node.param("/Mission/mode", mission_mode, mission_mode);
 
     const ros::Publisher position_publisher =
         node.advertise<geometry_msgs::PoseStamped>(
@@ -717,15 +719,14 @@ int main(int argc, char **argv)
     {
         ros::spinOnce();
         const int active_command = command.load(std::memory_order_relaxed);
-        std_msgs::Int32 command_state;
-        command_state.data = active_command;
-        command_state_publisher.publish(command_state);
         if (active_command != previous_command)
         {
             const bool was_nmpc_active =
-                previous_command == 3 || previous_command == 5 || previous_command == 7;
+                previous_command == 3 || previous_command == 5 ||
+                previous_command == 6 || previous_command == 7;
             const bool is_nmpc_active =
-                active_command == 3 || active_command == 5 || active_command == 7;
+                active_command == 3 || active_command == 5 ||
+                active_command == 6 || active_command == 7;
             if (!was_nmpc_active && is_nmpc_active)
             {
                 reset_ndob();
@@ -736,7 +737,13 @@ int main(int argc, char **argv)
             }
             trajectory_step = 0;
             reset_xy_integral();
-            if (active_command == 5)
+            const bool is_trajectory_command =
+                active_command == 5 ||
+                (active_command == 6 && mission_mode == "multi");
+            const bool was_trajectory_command =
+                previous_command == 5 ||
+                (previous_command == 6 && mission_mode == "multi");
+            if (active_command == 5 || active_command == 6)
             {
                 planner_fallback_hold = local_position;
                 // A reference from the previous tracking session must not be reused
@@ -744,11 +751,13 @@ int main(int argc, char **argv)
                 has_planner_command = false;
                 has_planner_horizon = false;
             }
-            if (active_command == 5 || previous_command == 5)
+            if (is_trajectory_command || was_trajectory_command)
             {
                 geometry_msgs::PoseStamped trigger;
                 trigger.header.stamp = ros::Time::now();
-                trigger.header.frame_id = active_command == 5 ? "start" : "stop";
+                trigger.header.frame_id = is_trajectory_command
+                    ? (mission_mode == "multi" ? "segment" : "start")
+                    : "stop";
                 trigger.pose = position_setpoint.pose;
                 trigger.pose.position.x = local_position.x();
                 trigger.pose.position.y = local_position.y();
@@ -762,6 +771,9 @@ int main(int argc, char **argv)
             ROS_INFO("FSM command changed: %d -> %d", previous_command, active_command);
             previous_command = active_command;
         }
+        std_msgs::Int32 command_state;
+        command_state.data = active_command;
+        command_state_publisher.publish(command_state);
 
         switch (active_command)
         {
@@ -830,6 +842,24 @@ int main(int argc, char **argv)
                 arm_command,
                 last_request);
             nmpc_planner_track(planner_fallback_hold);
+            break;
+
+        case 6:
+            RequestOffboardAndArm(
+                set_mode_client,
+                arming_client,
+                offboard_mode,
+                arm_command,
+                last_request);
+            if (mission_mode == "multi")
+            {
+                nmpc_planner_track(planner_fallback_hold);
+            }
+            else
+            {
+                ROS_WARN_THROTTLE(2.0, "cmd 6 requires Mission.mode=multi; NMPC holds entry position");
+                nmpc_planner_track(planner_fallback_hold);
+            }
             break;
 
         case 7:

@@ -123,7 +123,7 @@ MID360
 - `cmd 3`：NMPC 悬停。单独运行时默认目标为 `(0, 0, 0.5)`；项目实飞 launch
   使用 `pre_align_altitude` 覆盖 Z，默认是 1.0 m。
 - `cmd 4`：原降落和上锁流程。
-- `cmd 5`：NMPC 跟踪规划器输出的 `/position_command`。
+- `cmd 5/6`：NMPC 跟踪规划器输出的 `/position_command`；多点任务分别执行第一段和第二段航点。
 - `cmd 7`：NMPC 八字轨迹测试。
 
 UDP 指令端口保持为 `12001`。
@@ -301,7 +301,7 @@ z_dot  = -L * (d_hat + R(q) * e3 * a_z - g * e3)
 ```
 
 对慢变或分段常值负载，估计误差按带宽`L`一阶收敛。抓取后增加的重量通常表现为
-`d_hat.z < 0`；绳摆、质心偏移和气流会同时出现在XY估计中。NDOB只在cmd 3、5、7的
+`d_hat.z < 0`；绳摆、质心偏移和气流会同时出现在XY估计中。NDOB只在cmd 3、5、6、7的
 NMPC闭环运行时更新，离开NMPC控制或重新进入时以当前速度零扰动初始化，避免模式切换突跳。
 
 默认参数位于`real_flight_bringup/config/nmpc.yaml`：

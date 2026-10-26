@@ -147,7 +147,7 @@
         <param name="fsm_command_topic" value="/fsm_ctrl/command" />
     </node>
 
-    <!-- Primary low-level controller: Jiangyin FSM + NMPC. cmd5 tracks /position_command. -->
+    <!-- Primary low-level controller: Jiangyin FSM + NMPC. cmd5/cmd6 track /position_command. -->
     <node if="$(arg enable_nmpc)" pkg="fsm_ctrl" type="single_offboard_fsm"
           name="single_offboard_fsm" output="screen">
         <rosparam command="load" file="$(find real_flight_bringup)/config/nmpc.yaml" />

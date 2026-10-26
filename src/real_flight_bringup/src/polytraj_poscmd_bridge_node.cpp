@@ -199,6 +199,7 @@ private:
     bool has_collision_event_{false};
     quadrotor_msgs::CollisionEvent collision_event_;
     ros::Time active_traj_stamp_;
+    ros::Time active_traj_received_time_;
     ros::Time pending_collision_stamp_;
     quadrotor_msgs::CollisionEvent pending_collision_event_;
     bool has_pending_collision_event_{false};
@@ -257,8 +258,9 @@ private:
     }
 
     void startTriggerCallback(const geometry_msgs::PoseStamped::ConstPtr &msg) {
-        const bool enable = (msg->header.frame_id == "start");
-        if (enable == tracking_enabled_) {
+        const bool new_segment = (msg->header.frame_id == "segment");
+        const bool enable = (msg->header.frame_id == "start" || new_segment);
+        if (enable == tracking_enabled_ && !new_segment) {
             return;
         }
         tracking_enabled_ = enable;
@@ -266,18 +268,29 @@ private:
         force_collision_hold_active_ = false;
         waiting_post_collision_traj_ = false;
         if (enable) {
-            // A trajectory can be planned during cmd3. Start it from its beginning
-            // when cmd5 arrives, rather than using elapsed planning/hover time.
-            traj_start_time_ = has_traj_
-                ? ros::Time::now() + ros::Duration(traj_start_delay_)
-                : ros::TIME_MAX;
+            if (new_segment) {
+                // Drop the previous segment's buffered trajectory. A new one
+                // may already have arrived through another ROS subscription.
+                if (has_traj_ && active_traj_received_time_ < msg->header.stamp) {
+                    has_traj_ = false;
+                }
+                if (!has_traj_) {
+                    traj_start_time_ = ros::TIME_MAX;
+                }
+            } else {
+                // Single-goal mode may plan during cmd3; replay that trajectory
+                // from its beginning when tracking starts.
+                traj_start_time_ = has_traj_
+                    ? ros::Time::now() + ros::Duration(traj_start_delay_)
+                    : ros::TIME_MAX;
+            }
             if (has_odom_) {
                 hold_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
             } else {
                 hold_yaw_ = yawFromQuaternion(msg->pose.orientation);
             }
             ROS_INFO("[polytraj_poscmd_bridge] Tracking enabled; %s",
-                     has_traj_ ? "start buffered trajectory from t=0" : "waiting for trajectory");
+                     has_traj_ ? "using buffered trajectory" : "waiting for trajectory");
         } else {
             traj_start_time_ = ros::TIME_MAX;
             ROS_INFO("[polytraj_poscmd_bridge] Tracking stopped");
@@ -427,6 +440,7 @@ private:
         traj_id_ = msg->trajectory_id;
         const ros::Time now = ros::Time::now();
         active_traj_stamp_ = msg->header.stamp;
+        active_traj_received_time_ = now;
         has_collision_event_ = false;
         if (has_pending_collision_event_ && !active_traj_stamp_.isZero() &&
             pending_collision_stamp_ == active_traj_stamp_) {

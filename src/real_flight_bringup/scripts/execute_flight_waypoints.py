@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute Mission.waypoints from mission.yaml with per-point mode and yaw."""
+"""Execute the cmd5/cmd6 waypoint segments from mission.yaml."""
 
 import math
 import os
@@ -15,6 +15,7 @@ from quadrotor_msgs.msg import FlightWaypoint, PolynomialTrajectory
 
 VALID_MODES = {"avoidance": FlightWaypoint.MODE_COLLISION_FREE,
                "collision": FlightWaypoint.MODE_COLLISION}
+SEGMENT_COMMANDS = (5, 6)
 
 
 def normalize_angle(value):
@@ -40,30 +41,41 @@ def load_waypoints(path):
     if mission_mode not in ("single", "multi"):
         raise ValueError("Mission.mode must be single or multi")
     if mission_mode == "single":
-        return None, []
+        return None, {}
     frame_id = str(mission.get("frame_id", "world"))
-    raw_points = mission.get("waypoints")
-    if not isinstance(raw_points, list) or not raw_points:
-        raise ValueError("Mission.mode is multi but Mission.waypoints is empty")
+    raw_segments = mission.get("segments")
+    if not isinstance(raw_segments, dict):
+        raise ValueError("Mission.mode is multi but Mission.segments is missing")
 
-    points = []
-    for index, raw in enumerate(raw_points):
-        if not isinstance(raw, dict) or int(raw.get("id", index)) != index:
-            raise ValueError("waypoint ids must be contiguous and start at 0")
-        mode_name = str(raw.get("flight_mode", "")).strip().lower()
-        if mode_name not in VALID_MODES:
-            raise ValueError("waypoint {} has invalid flight_mode".format(index))
-        mode = int(raw.get("trajectory_mode", VALID_MODES[mode_name]))
-        if mode != VALID_MODES[mode_name]:
-            raise ValueError("waypoint {} mode fields conflict".format(index))
-        point = {"id": index, "mode_name": mode_name, "mode": mode}
-        for field in ("x", "y", "z", "yaw"):
-            point[field] = float(raw[field])
-            if not math.isfinite(point[field]):
-                raise ValueError("waypoint {} {} is not finite".format(index, field))
-        point["yaw"] = normalize_angle(point["yaw"])
-        points.append(point)
-    return frame_id, points
+    segments = {}
+    for command in SEGMENT_COMMANDS:
+        segment_name = "cmd{}".format(command)
+        raw_points = raw_segments.get(segment_name)
+        if not isinstance(raw_points, list) or not raw_points:
+            raise ValueError("Mission.segments.{} must contain waypoints".format(segment_name))
+        points = []
+        for index, raw in enumerate(raw_points):
+            if not isinstance(raw, dict) or int(raw.get("id", index)) != index:
+                raise ValueError("{} waypoint ids must start at 0 and be contiguous".format(
+                    segment_name))
+            mode_name = str(raw.get("flight_mode", "")).strip().lower()
+            if mode_name not in VALID_MODES:
+                raise ValueError("{} waypoint {} has invalid flight_mode".format(
+                    segment_name, index))
+            mode = int(raw.get("trajectory_mode", VALID_MODES[mode_name]))
+            if mode != VALID_MODES[mode_name]:
+                raise ValueError("{} waypoint {} mode fields conflict".format(
+                    segment_name, index))
+            point = {"id": index, "mode_name": mode_name, "mode": mode}
+            for field in ("x", "y", "z", "yaw"):
+                point[field] = float(raw[field])
+                if not math.isfinite(point[field]):
+                    raise ValueError("{} waypoint {} {} is not finite".format(
+                        segment_name, index, field))
+            point["yaw"] = normalize_angle(point["yaw"])
+            points.append(point)
+        segments[command] = points
+    return frame_id, segments
 
 
 class FlightWaypointExecutor:
@@ -74,9 +86,11 @@ class FlightWaypointExecutor:
             "config", "mission.yaml")
         mission_file = os.path.abspath(os.path.expanduser(
             rospy.get_param("~mission_file", default_mission_file)))
-        self._frame_id, self._points = load_waypoints(mission_file)
-        if not self._points:
+        self._frame_id, self._segments = load_waypoints(mission_file)
+        if not self._segments:
             raise RuntimeError("Mission.mode is single; multi-point executor is inactive")
+        self._points = []
+        self._active_segment = None
         self._goal_topic = rospy.get_param("~goal_topic", "/flight_waypoint_goal")
         self._odom_topic = rospy.get_param("~odom_topic", "/visual_slam/odom")
         self._remaining_topic = rospy.get_param(
@@ -92,9 +106,12 @@ class FlightWaypointExecutor:
         self._remaining_tolerance = float(rospy.get_param("~remaining_time_tolerance", 0.25))
         self._hold_time = float(rospy.get_param("~hold_time", 0.5))
         self._minimum_goal_age = float(rospy.get_param("~minimum_goal_age", 0.5))
-        self._index = int(rospy.get_param("~start_index", 0))
-        if self._index < 0 or self._index >= len(self._points):
-            raise ValueError("~start_index is outside the waypoint list")
+        self._start_index = int(rospy.get_param("~start_index", 0))
+        if self._start_index < 0 or any(
+                self._start_index >= len(points)
+                for points in self._segments.values()):
+            raise ValueError("~start_index is outside a waypoint segment")
+        self._index = self._start_index
         for name, value in (("position_tolerance", self._position_tolerance),
                             ("yaw_tolerance", self._yaw_tolerance),
                             ("remaining_time_tolerance", self._remaining_tolerance),
@@ -129,12 +146,14 @@ class FlightWaypointExecutor:
             self._fsm_command_topic, Int32, self._fsm_command_callback,
             queue_size=10)
         self._timer = rospy.Timer(rospy.Duration(0.1), self._timer_callback)
-        self._publish_status("loaded {} waypoint(s) from {}".format(
-            len(self._points), mission_file))
+        self._publish_status("loaded cmd5={} cmd6={} waypoint(s) from {}".format(
+            len(self._segments[5]), len(self._segments[6]), mission_file))
 
     def _publish_status(self, detail=""):
-        text = "state={} index={}/{}".format(
-            self._state, min(self._index + 1, len(self._points)), len(self._points))
+        segment = "cmd{}".format(self._active_segment) if self._active_segment else "none"
+        text = "state={} segment={} index={}/{}".format(
+            self._state, segment,
+            min(self._index + 1, len(self._points)), len(self._points))
         if detail:
             text += " " + detail
         self._status_pub.publish(String(data=text))
@@ -163,8 +182,9 @@ class FlightWaypointExecutor:
         message = FlightWaypoint()
         message.header.stamp = rospy.Time.now()
         message.header.frame_id = self._frame_id
-        message.id = point["id"]
-        message.total_waypoints = len(self._points)
+        message.id = point["id"] + (
+            len(self._segments[5]) if self._active_segment == 6 else 0)
+        message.total_waypoints = sum(len(points) for points in self._segments.values())
         message.position.x = point["x"]
         message.position.y = point["y"]
         message.position.z = point["z"]
@@ -180,11 +200,12 @@ class FlightWaypointExecutor:
                 point["mode_name"], point["x"], point["y"], point["z"], point["yaw"]))
 
     def _start_locked(self):
-        if self._fsm_command != 5:
-            self._publish_status("waiting for FSM cmd 5 before starting")
+        if self._active_segment not in SEGMENT_COMMANDS or \
+                self._fsm_command != self._active_segment:
+            self._publish_status("waiting for FSM cmd 5 or cmd 6 before starting")
             return
         if self._state == "COMPLETE":
-            self._index = 0
+            self._index = self._start_index
         if self._odom is None:
             self._state = "WAITING_ODOM"
             self._publish_status("waiting for odometry before publishing")
@@ -198,16 +219,20 @@ class FlightWaypointExecutor:
                 return
             previous_command = self._fsm_command
             self._fsm_command = message.data
-            if message.data == 5:
-                self._index = 0
+            if message.data in SEGMENT_COMMANDS:
+                self._active_segment = message.data
+                self._points = self._segments[message.data]
+                self._index = self._start_index
                 self._start_locked()
-            elif previous_command == 5:
+            elif previous_command in SEGMENT_COMMANDS:
                 self._state = "IDLE"
+                self._active_segment = None
+                self._points = []
                 self._index = 0
                 self._remaining = None
                 self._within_since = None
                 self._trajectory_received = False
-                self._publish_status("FSM left cmd 5; waypoint sequence stopped")
+                self._publish_status("FSM left trajectory tracking; waypoint sequence stopped")
 
     def _command_callback(self, message):
         command = message.data.strip().lower()
@@ -226,11 +251,17 @@ class FlightWaypointExecutor:
                 self._publish_status("sequencing stopped")
         elif command == "retry":
             with self._lock:
-                self._state = "RUNNING"
-                self._publish_current_goal()
+                if self._active_segment in SEGMENT_COMMANDS:
+                    self._state = "RUNNING"
+                    self._publish_current_goal()
+                else:
+                    self._publish_status("retry requires FSM cmd 5 or cmd 6")
         elif command == "next":
             with self._lock:
-                self._advance(force=True)
+                if self._active_segment in SEGMENT_COMMANDS:
+                    self._advance(force=True)
+                else:
+                    self._publish_status("next requires FSM cmd 5 or cmd 6")
         elif command == "status":
             with self._lock:
                 self._publish_status()

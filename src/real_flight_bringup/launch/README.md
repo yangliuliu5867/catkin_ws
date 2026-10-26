@@ -106,11 +106,11 @@ roslaunch real_flight_bringup real_flight_step1.launch \
 `/planner/inflated_map`，避免和输入话题形成回环。它仍需要 CUDA、TensorRT 和
 `mpd_splines` 的三个 engine 文件。
 
-轨迹执行使用 `fsm_ctrl` 的 `cmd 5`：进入 `cmd 5` 时，状态机向
+单点流程的轨迹执行使用 `fsm_ctrl` 的 `cmd 5`：进入 `cmd 5` 时，状态机向
 `/traj_start_trigger` 发布 `start`，采样桥开始发布 `/position_command` 和
 `/position_command_horizon`。如果轨迹已在 `cmd 3` 悬停期间生成，进入 `cmd 5`
 后从该轨迹的起点计时；如果尚未生成，则保持当前位置，等待正式轨迹。
-退出 `cmd 5`（例如切回 `cmd 3` 或输入 `cmd 4`）时发布 `stop`，采样桥停止跟踪指令。
+退出轨迹跟踪命令（例如切回 `cmd 3` 或输入 `cmd 4`）时发布 `stop`，采样桥停止跟踪指令。
 不需要再手动发布启动触发。执行前应在 RViz 核对选中轨迹及撞击位置。
 目标发布节点会等待 `cmd 3`（已切换到 `cmd 5` 也可）、解锁、OFFBOARD 和
 悬停高度持续满足条件后，才开始预对齐并发布目标。等待操作和起飞的时间不计入
@@ -119,7 +119,7 @@ roslaunch real_flight_bringup real_flight_step1.launch \
 常用参数：
 
 - `enable_goal_publish:=true`：当`Mission.mode: single`时自动发送`mission.yaml`中的`SetPos`；
-- `enable_waypoint_executor:=true`：当`Mission.mode: multi`时读取`Mission.waypoints`并依次执行；
+- `enable_waypoint_executor:=true`：当`Mission.mode: multi`时读取`Mission.segments.cmd5/cmd6`；
 - `enable_rviz_goal:=true`：接收RViz的`/move_base_simple/goal`并转发给规划器；
 - `rviz_goal_z:=1.0`：RViz点击目标使用的固定高度；
 - `point_cloud_use_pcd:=false`：默认在线地图；改成 `true` 可回到原静态 PCD；
@@ -247,7 +247,7 @@ roslaunch real_flight_bringup collision_planning_preview.launch
 打点默认写入当前机器上`real_flight_bringup`包的`config/flight_waypoints.yaml`。
 启动时日志会打印解析后的完整路径；也可用`_output_file:=/绝对路径/flight_waypoints.yaml`覆盖。
 实际执行始终读取`config/mission.yaml`。打点完成后，由操作者把记录文件的`waypoints`
-列表手工复制到`mission.yaml`的`Mission.waypoints`下。
+列表手工复制到`mission.yaml`的`Mission.segments.cmd5`或`cmd6`下。
 
 ```bash
 rosrun real_flight_bringup record_flight_waypoints.py \
@@ -271,32 +271,41 @@ rosrun real_flight_bringup record_flight_waypoints.py \
 Mission:
   mode: single
   frame_id: world
-  waypoints: []
 SetPos: [0.0, 3.5, 1.40]
 SetAtt: [0.0, 0.0, 1.0, 0.0]
 ```
 
-多点任务把`mode`改为`multi`，并将`flight_waypoints.yaml`中的列表项复制到
-`Mission.waypoints`。每个点保留`id`、`flight_mode`、`trajectory_mode`、XYZ和yaw，
-编号从0连续递增。`Mission.frame_id`也要与打点文件一致。例如：
+多点任务把`mode`改为`multi`，并将`flight_waypoints.yaml`中的列表项按飞行阶段复制到
+`Mission.segments.cmd5`和`Mission.segments.cmd6`。每段可以包含多个航点，每段的`id`
+分别从0连续编号；保留`flight_mode`、`trajectory_mode`、XYZ和yaw。
+`Mission.frame_id`也要与打点坐标系一致。例如：
 
 ```yaml
 Mission:
   mode: multi
   frame_id: world
-  waypoints:
-    - id: 0
-      flight_mode: avoidance
-      trajectory_mode: 1
-      x: 0.0
-      y: 1.0
-      z: 1.0
-      yaw: 0.0
+  segments:
+    cmd5:
+      - id: 0
+        flight_mode: avoidance
+        trajectory_mode: 1
+        x: 0.0
+        y: 1.0
+        z: 1.0
+        yaw: 0.0
+    cmd6:
+      - id: 0
+        flight_mode: avoidance
+        trajectory_mode: 1
+        x: 1.0
+        y: 2.0
+        z: 1.0
+        yaw: 0.0
 ```
 
 示例坐标仅展示格式，实飞前应替换为实际打点结果。修改`mission.yaml`后重新启动
 `real_flight_step1.launch`，因为执行器在启动时读取任务。`single`使用原`SetPos`
-发布目标；`multi`由执行器顺序发布列表中的每个点，两种模式不会同时自动发布目标。
+发布目标；`multi`由执行器按`cmd 5/6`选择对应航点段，两种模式不会同时自动发布目标。
 
 ### 依次执行多点任务
 
@@ -304,7 +313,7 @@ Mission:
 `avoidance/collision`模式会在同一次目标更新中送到前端规划器和轨迹生成器：
 
 ```text
-mission.yaml / Mission.waypoints
+mission.yaml / Mission.segments.cmd5 或 cmd6
   -> /flight_waypoint_goal (XYZ + mode + yaw)
   -> intention_get_corridor (按点选择避碰或计划碰撞)
   -> traj_gen_in_corridor (生成位置轨迹和终点yaw)
@@ -318,10 +327,12 @@ roslaunch real_flight_bringup real_flight_step1.launch \
   enable_rviz_goal:=false
 ```
 
-`Mission.mode: multi`时，进入`cmd 5`会自动发布第0个航点，无需再发送`start`；
-离开`cmd 5`会停止航点序列，再次进入则从第0个航点重新执行。
+`Mission.mode: multi`时，进入`cmd 5`会自动执行第一段；第一段完成后保持末点，
+输入`cmd 6`才会执行第二段。切换段时清除旧轨迹并等待新轨迹；退出`cmd 5/6`
+会停止当前航点序列，再次进入某段则从该段第0个航点重新执行。
 `Mission.mode: single`仍由原`SetPos`单点流程发布目标。
-实际飞行前应确认`Mission.waypoints`的坐标系和高度正确。
+单点模式下`cmd 6`不发布第二段目标，控制器保持进入该命令时的位置。
+实际飞行前应确认两段航点的坐标系和高度正确。
 
 执行器只有在以下条件持续满足0.5秒后才发送下一点：XYZ误差不超过0.20米、yaw误差
 不超过0.20弧度、`/trajectory_remaining_time`不超过0.25秒。状态可查看：
@@ -331,7 +342,7 @@ rostopic echo /execute_flight_waypoints/status
 ```
 
 控制命令包括`start`、`pause`、`resume`、`retry`、`next`、`stop`和`status`；
-`start/resume`仅在`cmd 5`下有效。正常进入`cmd 5`已自动开始，无需手工发送。
+`start/resume`仅在`cmd 5`或`cmd 6`下有效。正常进入对应命令已自动开始，无需手工发送。
 `pause/stop`只停止航点序列推进，不会替代飞控的悬停/停止命令；需要停机或悬停仍应使用
 现有FSM命令。也可单独启动执行器：
 
@@ -374,7 +385,8 @@ rostopic pub -1 /waypoint_recorder/command std_msgs/String "data: 'a'"
 - `cmd 2`：PX4 位置起飞；
 - `cmd 3`：NMPC 悬停；
 - `cmd 4`：降落和上锁；
-- `cmd 5`：NMPC 跟踪 `/position_command`；
+- `cmd 5`：NMPC 跟踪第一段航点；
+- `cmd 6`：NMPC 跟踪第二段航点；
 - `cmd 7`：NMPC 八字轨迹。
 
 调试时可同时查看：
