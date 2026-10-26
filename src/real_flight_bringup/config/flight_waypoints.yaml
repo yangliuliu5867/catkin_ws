@@ -1,25 +1,30 @@
-# 打点原始记录文件；打点后由 record_flight_waypoints.py 更新。
-# 飞行任务以 mission.yaml 为准；完成打点后手工复制航点至 Mission.waypoints。
-# 下方是格式示例（演示坐标，未作为真实航点加载）：
-# waypoints:
-#   - id: 0
-#     flight_mode: avoidance    # 避碰；按 1 后再按 a 打点
-#     trajectory_mode: 1
-#     x: 0.000000
-#     y: 1.000000
-#     z: 1.000000
-#     yaw: 0.000000             # 弧度，来自当前姿态
-#   - id: 1
-#     flight_mode: collision    # 计划碰撞；按 2 后再按 a 打点
-#     trajectory_mode: 2
-#     x: 0.500000
-#     y: 2.000000
-#     z: 1.000000
-#     yaw: 1.570796             # 约 90 度
+# Flight waypoint file: yaw unit is rad.
+# trajectory_mode: 1=avoidance, 2=collision.
 schema_version: 1
 frame_id: world
 pose_topic: /mavros/local_position/pose
 mode_ids:
   avoidance: 1
   collision: 2
-waypoints: []
+waypoints:
+- id: 0
+  flight_mode: avoidance
+  trajectory_mode: 1
+  x: -0.243094
+  y: 1.5965
+  z: -0.014684
+  yaw: 1.378281
+- id: 1
+  flight_mode: avoidance
+  trajectory_mode: 1
+  x: -0.212464
+  y: 1.556147
+  z: -0.019181
+  yaw: 1.380226
+- id: 2
+  flight_mode: avoidance
+  trajectory_mode: 1
+  x: -0.189157
+  y: 1.521898
+  z: -0.01964
+  yaw: 1.380787
