@@ -234,6 +234,7 @@ private:
     Eigen::Vector3d current_traj_goal_{Eigen::Vector3d::Zero()};
     std::atomic<int> latest_goal_mode_{quadrotor_msgs::FlightWaypoint::MODE_UNSET};
     std::atomic<bool> grasp_goal_active_{false};
+    std::atomic<bool> grasp_departure_active_{false};
     double grasp_body_radius_xy_{0.29};
     double grasp_body_below_m_{0.10};
     double grasp_body_above_m_{0.10};
@@ -2726,7 +2727,8 @@ private:
                                   uint32_t waypoint_id,
                                   bool has_yaw,
                                   double yaw,
-                                  bool grasp_target = false)
+                                  bool grasp_target = false,
+                                  bool grasp_departure = false)
     {
         static int seq = 0;
         if (!odomInitialized.load())
@@ -2770,8 +2772,9 @@ private:
         }
         latest_goal_mode_.store(flight_mode);
         latest_goal_id_.store(waypoint_id);
-        grasp_goal_active_.store(grasp_target &&
+        grasp_goal_active_.store((grasp_target || grasp_departure) &&
             flight_mode == quadrotor_msgs::FlightWaypoint::MODE_COLLISION_FREE);
+        grasp_departure_active_.store(grasp_departure && grasp_goal_active_.load());
         has_requested_goal_yaw_.store(has_yaw && std::isfinite(yaw));
         if (has_yaw && std::isfinite(yaw)) requested_goal_yaw_.store(yaw);
         has_active_goal_.store(true);
@@ -2787,7 +2790,8 @@ private:
         ROS_INFO("Accepted mission waypoint id=%u mode=%u xyz=(%.3f, %.3f, %.3f)%s%s",
                  waypoint_id, static_cast<unsigned int>(flight_mode),
                  target.x(), target.y(), target.z(), has_yaw ? " with yaw" : "",
-                 grasp_goal_active_.load() ? " grasp target" : "");
+                 grasp_departure_active_.load() ? " grasp departure" :
+                 (grasp_goal_active_.load() ? " grasp target" : ""));
 
         plan_msg.header.seq = ++seq;
         // The legacy PCD seed comes from SetPos/SetAtt. A mode-aware mission
@@ -2818,12 +2822,12 @@ private:
         }
         Eigen::Vector3d target(msg->position.x, msg->position.y, msg->position.z);
         handleMissionGoal(target, msg->flight_mode, msg->id, true, msg->yaw,
-                          msg->grasp_target);
+                          msg->grasp_target, msg->grasp_departure);
     }
 
-    // The recorded grasp pose is physically reachable by the aircraft body but
-    // lies inside the generic 3-D inflated map because the gripper contacts an
-    // object below it. Only an explicitly tagged waypoint may use this route.
+    // The recorded grasp pose and its initial departure may lie inside the
+    // generic inflated map because the gripper contacts an object below the
+    // aircraft. Only explicitly tagged waypoints may use this route.
     inline void planGraspApproach()
     {
         nav_msgs::Odometry odom_local;
@@ -2891,7 +2895,8 @@ private:
             if (target_xy < 0.30 && target_drop > 0.13 && target_drop < 0.35)
                 ++target_evidence;
         }
-        if (target_evidence < 3 || map_version != online_map_version_.load())
+        if ((!grasp_departure_active_.load() && target_evidence < 3) ||
+            map_version != online_map_version_.load())
         {
             ROS_WARN_THROTTLE(2.0, "Grasp approach rejected: target evidence missing or map changed");
             return;

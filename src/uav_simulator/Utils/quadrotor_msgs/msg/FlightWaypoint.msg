@@ -11,3 +11,4 @@ geometry_msgs/Point position
 uint8 flight_mode
 float64 yaw
 bool grasp_target
+bool grasp_departure

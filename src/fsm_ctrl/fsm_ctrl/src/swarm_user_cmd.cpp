@@ -222,7 +222,7 @@ int main(int argc, char **argv)
         std::cout << "\nFSM 当前命令: " << fsm_command.load()
                   << "    最近输入: " << user_command.load() << "\n\n"
                   << "1: OFFBOARD/解锁预备   2: PX4位置1m   3: NMPC悬停\n"
-                  << "4: 正常降落            5: NMPC规划跟踪  7: NMPC八字轨迹\n"
+                  << "4: 正常降落            5: 第一段/抓取   6: 第二段/撤离   7: NMPC八字轨迹\n"
                   << "0: 退出并发送cmd0（飞行中不要退出）\n"
                   << "请输入命令后回车: " << std::flush;
         rate.sleep();
