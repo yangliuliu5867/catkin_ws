@@ -244,7 +244,8 @@ roslaunch real_flight_bringup collision_planning_preview.launch
 
 程序只读取定位并写文件，不会解锁、切换OFFBOARD或向飞机发布控制指令。推荐在可交互终端中运行：
 
-打点只写入`/Users/yyx/Documents/catkin_ws/src/real_flight_bringup/config/flight_waypoints.yaml`。
+打点默认写入当前机器上`real_flight_bringup`包的`config/flight_waypoints.yaml`。
+启动时日志会打印解析后的完整路径；也可用`_output_file:=/绝对路径/flight_waypoints.yaml`覆盖。
 实际执行始终读取`config/mission.yaml`。打点完成后，由操作者把记录文件的`waypoints`
 列表手工复制到`mission.yaml`的`Mission.waypoints`下。
 

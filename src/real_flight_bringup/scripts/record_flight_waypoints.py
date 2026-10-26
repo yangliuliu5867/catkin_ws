@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 
+import rospkg
 import rospy
 import yaml
 from geometry_msgs.msg import PoseStamped
@@ -61,8 +62,11 @@ class FlightWaypointRecorder:
         self._pose_topic = rospy.get_param(
             "~pose_topic", "/mavros/local_position/pose")
         self._pose_type = str(rospy.get_param("~pose_type", "pose")).lower()
+        default_output_file = os.path.join(
+            rospkg.RosPack().get_path("real_flight_bringup"),
+            "config", "flight_waypoints.yaml")
         self._output_file = os.path.abspath(os.path.expanduser(rospy.get_param(
-            "~output_file", "/Users/yyx/Documents/catkin_ws/src/real_flight_bringup/config/flight_waypoints.yaml")))
+            "~output_file", default_output_file)))
         self._frame_id = str(rospy.get_param("~frame_id", "world"))
         self._mode = canonical_mode(rospy.get_param(
             "~default_flight_mode", "avoidance"))

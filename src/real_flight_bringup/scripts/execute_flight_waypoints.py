@@ -5,6 +5,7 @@ import math
 import os
 import threading
 
+import rospkg
 import rospy
 import yaml
 from nav_msgs.msg import Odometry
@@ -68,8 +69,11 @@ def load_waypoints(path):
 class FlightWaypointExecutor:
     def __init__(self):
         self._lock = threading.Lock()
+        default_mission_file = os.path.join(
+            rospkg.RosPack().get_path("real_flight_bringup"),
+            "config", "mission.yaml")
         mission_file = os.path.abspath(os.path.expanduser(
-            rospy.get_param("~mission_file", "/Users/yyx/Documents/catkin_ws/src/real_flight_bringup/config/mission.yaml")))
+            rospy.get_param("~mission_file", default_mission_file)))
         self._frame_id, self._points = load_waypoints(mission_file)
         if not self._points:
             raise RuntimeError("Mission.mode is single; multi-point executor is inactive")
