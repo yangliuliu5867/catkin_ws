@@ -213,7 +213,7 @@ roslaunch real_flight_bringup localization.launch \
 ## thrust_calibrate_nmpc.launch
 
 用途：保留原项目的推力/电压记录功能，记录 NMPC 实际发布到
-`/mavros/setpoint_raw/attitude` 的油门和 `/mavros/battery` 电压，不启动额外控制器。
+`/mavros/setpoint_attitude/thrust` 的带符号推力和 `/mavros/battery` 电压，不启动额外控制器。
 
 ```bash
 roslaunch real_flight_bringup thrust_calibrate_nmpc.launch \
@@ -399,6 +399,7 @@ rostopic pub -1 /waypoint_recorder/command std_msgs/String "data: 'a'"
 - `cmd 5`：NMPC 跟踪第一段航点；
 - `cmd 6`：NMPC 跟踪第二段航点；
 - `cmd 7`：NMPC 八字轨迹。
+- `cmd 8`：从正飞 `cmd 3` 翻转至倒飞，完成后自动回到倒飞 `cmd 3`。
 
 调试时可同时查看：
 
@@ -413,5 +414,7 @@ rostopic pub -1 /waypoint_recorder/command std_msgs/String "data: 'a'"
 - `/collision_recovery/collision`、`fix_pose`、`stop`：旧恢复状态机的三个阶段；
 - `/collision_recovery/filtered_force`：恢复节点使用的滤波外力。
 
-底层轨迹跟踪控制器只有 `single_offboard_fsm` 中的 NMPC，输出到
-`/mavros/setpoint_raw/attitude`。
+`3Droll` 分支的 NMPC 角速度／推力输出统一走
+`/mavros/setpoint_attitude/cmd_vel` 和 `/mavros/setpoint_attitude/thrust`。
+必须先启动可逆推力 MAVROS；完整操作及倒飞后跟踪 `cmd 5` 的说明见
+`fsm_ctrl/launch/README_3droll.md`。

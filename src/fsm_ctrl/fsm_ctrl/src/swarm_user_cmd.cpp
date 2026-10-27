@@ -223,6 +223,7 @@ int main(int argc, char **argv)
                   << "    最近输入: " << user_command.load() << "\n\n"
                   << "1: OFFBOARD/解锁预备   2: PX4位置1m   3: NMPC悬停\n"
                   << "4: 正常降落            5: 第一段/抓取   6: 第二段/撤离   7: NMPC八字轨迹\n"
+                  << "8: 从 cmd3 翻至倒飞，完成后自动回 cmd3 倒飞悬停\n"
                   << "0: 退出并发送cmd0（飞行中不要退出）\n"
                   << "请输入命令后回车: " << std::flush;
         rate.sleep();

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="fcu_url" default="/dev/ttyACM0:921600" />
+  <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
+  <arg name="lidar_to_body_pitch_deg" default="-25.3" />
+  <arg name="hover_z" default="1.8" />
+  <arg name="hover_thrust" default="0.48" />
+  <arg name="roll_duration_sec" default="1.2" />
+  <arg name="roll_rate_limit" default="6.0" />
+  <arg name="roll_min_height" default="1.5" />
+  <arg name="inverted_land_speed" default="0.20" />
+
+  <include file="$(find fsm_ctrl)/launch/mavros_3d.launch">
+    <arg name="fcu_url" value="$(arg fcu_url)" />
+  </include>
+  <include file="$(find fsm_ctrl)/launch/px4_estimator.launch">
+    <arg name="lidar_odom_topic" value="$(arg lidar_odom_topic)" />
+    <arg name="lidar_to_body_pitch_deg" value="$(arg lidar_to_body_pitch_deg)" />
+  </include>
+  <include file="$(find fsm_ctrl)/launch/single.launch">
+    <arg name="start_mavros" value="false" />
+    <arg name="enable_cmd8" value="true" />
+    <arg name="hover_z" value="$(arg hover_z)" />
+    <arg name="hover_thrust" value="$(arg hover_thrust)" />
+    <arg name="roll_duration_sec" value="$(arg roll_duration_sec)" />
+    <arg name="roll_rate_limit" value="$(arg roll_rate_limit)" />
+    <arg name="roll_min_height" value="$(arg roll_min_height)" />
+    <arg name="inverted_land_speed" value="$(arg inverted_land_speed)" />
+  </include>
+</launch>

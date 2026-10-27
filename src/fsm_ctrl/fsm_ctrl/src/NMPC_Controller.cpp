@@ -1,4 +1,5 @@
 #include "fsm_ctrl/NMPC_Controller.hpp"
+#include <algorithm>
 
 NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
                                          std::array<double, 2> _acc_z_limit,
@@ -34,7 +35,7 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
     for (int j = 0; j < NLP_predict_step; j++) NLP_initial_u0.push_back(0);          // wx[0..N-1]
     for (int j = 0; j < NLP_predict_step; j++) NLP_initial_u0.push_back(0);          // wy[0..N-1]
     for (int j = 0; j < NLP_predict_step; j++) NLP_initial_u0.push_back(0);          // wz[0..N-1]
-    for (int j = 0; j < NLP_predict_step; j++) NLP_initial_u0.push_back(0);          // az[0..N-1]
+    for (int j = 0; j < NLP_predict_step; j++) NLP_initial_u0.push_back(world_gravity_acc); // az[0..N-1]
 
     /* states */
     casadi::SX p = casadi::SX::sym("p", 3);             // position in world frame 3*1
@@ -93,7 +94,25 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
         input_X.push_back(U_current);
         input_X.push_back(opt_param(casadi::Slice(reference_parameter_count,
                                                    reference_parameter_count + 3, 1)));
-        X(casadi::Slice(), i + 1) = model_function(input_X).at(0) * NLP_onestep_time + X_current;
+        const casadi::SX euler_next =
+            model_function(input_X).at(0) * NLP_onestep_time + X_current;
+        // Integrate attitude on SO(3): Euler quaternion updates lose norm
+        // during a large roll and corrupt the predicted thrust direction.
+        const casadi::SX omega = U_current(casadi::Slice(0, 3));
+        const casadi::SX omega_norm = sqrt(casadi::sumsqr(omega) + 1e-12);
+        const casadi::SX half_angle = 0.5 * omega_norm * NLP_onestep_time;
+        const casadi::SX scale = sin(half_angle) / omega_norm;
+        const casadi::SX dq = casadi::SX::vertcat({
+            cos(half_angle), scale * omega(0), scale * omega(1), scale * omega(2)});
+        const casadi::SX q = X_current(casadi::Slice(6, 10));
+        const casadi::SX q_next = casadi::SX::vertcat({
+            q(0)*dq(0) - q(1)*dq(1) - q(2)*dq(2) - q(3)*dq(3),
+            q(0)*dq(1) + q(1)*dq(0) + q(2)*dq(3) - q(3)*dq(2),
+            q(0)*dq(2) - q(1)*dq(3) + q(2)*dq(0) + q(3)*dq(1),
+            q(0)*dq(3) + q(1)*dq(2) - q(2)*dq(1) + q(3)*dq(0)});
+        X(casadi::Slice(), i + 1) = casadi::SX::vertcat({
+            euler_next(casadi::Slice(0, 6)),
+            q_next / sqrt(casadi::sumsqr(q_next) + 1e-12)});
     }
 
     //惩罚矩阵
@@ -289,19 +308,19 @@ void NMPC_Ctrller_simple::optimal_solution(std::vector<double> _current_states,
 
     for (int i = 0; i < NLP_predict_step; i++)
     {
-        initial_guess.push_back(cmd_control_wx.at(i));
+        initial_guess.push_back(cmd_control_wx.at(std::min(i + 1, NLP_predict_step - 1)));
     }
     for (int i = 0; i < NLP_predict_step; i++)
     {
-        initial_guess.push_back(cmd_control_wy.at(i));
+        initial_guess.push_back(cmd_control_wy.at(std::min(i + 1, NLP_predict_step - 1)));
     }
     for (int i = 0; i < NLP_predict_step; i++)
     {
-        initial_guess.push_back(cmd_control_wz.at(i));
+        initial_guess.push_back(cmd_control_wz.at(std::min(i + 1, NLP_predict_step - 1)));
     }
     for (int i = 0; i < NLP_predict_step; i++)
     {
-        initial_guess.push_back(cmd_control_acc_z.at(i));
+        initial_guess.push_back(cmd_control_acc_z.at(std::min(i + 1, NLP_predict_step - 1)));
     }
 
     NLP_initial_u0 = initial_guess;

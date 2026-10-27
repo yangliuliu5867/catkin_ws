@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="fcu_url" default="/dev/ttyACM0:921600" />
+  <include file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="$(arg fcu_url)" />
+  </include>
+  <!-- Set this before the MAVROS node is started; the plugin reads it once. -->
+  <param name="/mavros/setpoint_attitude/reverse_thrust" type="bool" value="true" />
+  <param name="/mavros/setpoint_attitude/use_quaternion" type="bool" value="false" />
+</launch>

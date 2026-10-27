@@ -8,7 +8,7 @@ import time
 import os
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import BatteryState
-from mavros_msgs.msg import AttitudeTarget
+from mavros_msgs.msg import Thrust
 
 
 class ThrustCalibration:
@@ -39,7 +39,7 @@ class ThrustCalibration:
         self.bat_sub = rospy.Subscriber(
             "/mavros/battery", BatteryState, self.battery_voltage_cb)
         rospy.Subscriber(
-            "/mavros/setpoint_raw/attitude", AttitudeTarget, self.thrust_commands_cb)
+            "/mavros/setpoint_attitude/thrust", Thrust, self.thrust_commands_cb)
         rospy.Subscriber(
             "/traj_start_trigger", PoseStamped, self.start_trigger_cb)
 
@@ -53,7 +53,8 @@ class ThrustCalibration:
 
         # Record filted data
         cur_t = rospy.get_rostime()
-        if ((cur_t - self.last_records_t).to_sec() > self.time_average_interval):
+        if ((cur_t - self.last_records_t).to_sec() > self.time_average_interval and
+                self.volt_buf.size > 0 and self.cmd_buf.size > 0):
             self.last_records_t = cur_t
             # print self.volt_records.shape
             # print self.volt_buf.shape

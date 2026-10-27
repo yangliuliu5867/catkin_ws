@@ -4,6 +4,7 @@
     <arg name="enable_rviz_goal" default="true" />
     <arg name="rviz_goal_z" default="1.0" />
     <arg name="enable_nmpc" default="true" />
+    <arg name="enable_cmd8" default="true" />
     <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
     <arg name="lidar_to_body_pitch_deg" default="-25.3" />
     <arg name="point_cloud_use_pcd" default="false" />
@@ -151,6 +152,7 @@
     <node if="$(arg enable_nmpc)" pkg="fsm_ctrl" type="single_offboard_fsm"
           name="single_offboard_fsm" output="screen">
         <rosparam command="load" file="$(find real_flight_bringup)/config/nmpc.yaml" />
+        <param name="enable_cmd8" value="$(arg enable_cmd8)" />
         <param name="nmpc_hover_z" value="$(arg pre_align_altitude)" />
     </node>
 

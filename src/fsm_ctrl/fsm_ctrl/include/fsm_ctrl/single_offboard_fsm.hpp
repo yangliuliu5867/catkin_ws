@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <thread>
 #include <string>
 #include <vector>
@@ -20,9 +21,11 @@
 #include <geometry_msgs/TwistStamped.h>
 #include <mavros_msgs/AttitudeTarget.h>
 #include <mavros_msgs/CommandBool.h>
+#include <mavros_msgs/ExtendedState.h>
 #include <mavros_msgs/RCIn.h>
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
+#include <mavros_msgs/Thrust.h>
 #include <quadrotor_msgs/Px4ctrlDebug.h>
 #include <quadrotor_msgs/PositionCommand.h>
 #include <quadrotor_msgs/PositionCommandArray.h>

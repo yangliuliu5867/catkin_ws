@@ -3,12 +3,22 @@
 <launch>
     <arg name="start_mavros" default="true"/>
     <arg name="fcu_url" default="/dev/ttyACM0:921600"/>
+    <arg name="enable_cmd8" default="true"/>
+    <arg name="hover_z" default="0.5"/>
+    <arg name="hover_thrust" default="0.48"/>
+    <arg name="roll_duration_sec" default="1.2"/>
+    <arg name="roll_rate_limit" default="6.0"/>
+    <arg name="roll_min_height" default="1.5"/>
+    <arg name="inverted_land_speed" default="0.20"/>
 
-    <include if="$(arg start_mavros)" file="$(find mavros)/launch/px4.launch">
-        <arg name="fcu_url" value="$(arg fcu_url)"/>
-    </include>
+    <group if="$(arg start_mavros)">
+        <include file="$(find fsm_ctrl)/launch/mavros_3d.launch">
+            <arg name="fcu_url" value="$(arg fcu_url)"/>
+        </include>
+    </group>
 
     <node pkg="fsm_ctrl" type="single_offboard_fsm" name="single_offboard_fsm" output="screen">
+        <param name="enable_cmd8" type="bool" value="$(arg enable_cmd8)"/>
         <param name="nmpc_Qposx" type="double" value="50.0"/>
         <param name="nmpc_Qposy" type="double" value="50.0"/>
         <param name="nmpc_Qposz" type="double" value="80.0"/>
@@ -22,7 +32,12 @@
         <param name="nmpc_Rwy" type="double" value="0.9"/>
         <param name="nmpc_Rwz" type="double" value="0.5"/>
         <param name="nmpc_RtotalF" type="double" value="0.1"/>
-        <param name="nmpc_hover_thrust" type="double" value="0.48"/>
+        <param name="nmpc_hover_thrust" type="double" value="$(arg hover_thrust)"/>
+        <param name="nmpc_hover_z" type="double" value="$(arg hover_z)"/>
+        <param name="roll_duration_sec" type="double" value="$(arg roll_duration_sec)"/>
+        <param name="roll_rate_limit" type="double" value="$(arg roll_rate_limit)"/>
+        <param name="roll_min_height" type="double" value="$(arg roll_min_height)"/>
+        <param name="inverted_land_speed" type="double" value="$(arg inverted_land_speed)"/>
         <param name="planner_command_topic" value="/position_command"/>
         <param name="planner_horizon_topic" value="/position_command_horizon"/>
         <param name="nmpc_enable_xy_integral" type="bool" value="true"/>
