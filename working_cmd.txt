@@ -1,0 +1,45 @@
+cd ~
+cd lio
+bash start_lio.sh
+
+
+cd ~/catkin_ws
+source devel/setup.bash
+roslaunch fsm_ctrl mavros_3d.launch fcu_url:=/dev/ttyACM0:921600
+
+cd ~/catkin_ws
+source devel/setup.bash
+roslaunch real_flight_bringup real_flight_step1.launch
+
+cd ~
+cd catkin_ws
+source devel/setup.bash
+roslaunch fsm_ctrl swarm.launch
+
+~/bags/record_grasp_cmd5.sh
+
+
+cd ~/catkin_ws
+source devel/setup.bash
+rosrun real_flight_bringup record_flight_waypoints.py
+
+sudo ip link set can0 down
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+
+cd ~
+conda activate yopo
+python motor.py
+
+
+cd ~
+cd lio/livox_ros_driver2/
+source devel/setup.bash
+roslaunch livox_ros_driver2 msg_MID360.launch
+
+
+
+cd ~
+cd lio/Point-LIO/
+source devel/setup.bash
+roslaunch point_lio mapping_mid360.launch
