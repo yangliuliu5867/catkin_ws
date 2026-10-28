@@ -99,7 +99,7 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
         // Integrate attitude on SO(3): Euler quaternion updates lose norm
         // during a large roll and corrupt the predicted thrust direction.
         const casadi::SX omega = U_current(casadi::Slice(0, 3));
-        const casadi::SX omega_norm = sqrt(casadi::sumsqr(omega) + 1e-12);
+        const casadi::SX omega_norm = sqrt(casadi::SX::sumsqr(omega) + 1e-12);
         const casadi::SX half_angle = 0.5 * omega_norm * NLP_onestep_time;
         const casadi::SX scale = sin(half_angle) / omega_norm;
         const casadi::SX dq = casadi::SX::vertcat({
@@ -112,7 +112,7 @@ NMPC_Ctrller_simple::NMPC_Ctrller_simple(double _ctrl_T,
             q(0)*dq(3) + q(1)*dq(2) - q(2)*dq(1) + q(3)*dq(0)});
         X(casadi::Slice(), i + 1) = casadi::SX::vertcat({
             euler_next(casadi::Slice(0, 6)),
-            q_next / sqrt(casadi::sumsqr(q_next) + 1e-12)});
+            q_next / sqrt(casadi::SX::sumsqr(q_next) + 1e-12)});
     }
 
     //惩罚矩阵
