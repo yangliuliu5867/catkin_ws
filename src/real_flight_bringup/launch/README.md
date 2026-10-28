@@ -399,7 +399,7 @@ rostopic pub -1 /waypoint_recorder/command std_msgs/String "data: 'a'"
 - `cmd 5`：NMPC 跟踪第一段航点；
 - `cmd 6`：NMPC 跟踪第二段航点；
 - `cmd 7`：NMPC 八字轨迹。
-- `cmd 8`：从正飞 `cmd 3` 翻转至倒飞，完成后自动回到倒飞 `cmd 3`。
+- `cmd 8`：在正飞和倒飞之间切换 180°，完成后自动回到当前姿态的 `cmd 3`。节点启动时自动识别正放或倒放；倒放地面起飞可直接用 `cmd 3`。
 
 调试时可同时查看：
 

@@ -47,8 +47,12 @@ def _wait_for_offboard(cache: _StateCache, timeout_sec: float) -> bool:
     return False
 
 
-def _attitude_error_to_identity(q) -> float:
-    return math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + (q.w - 1.0) * (q.w - 1.0))
+def _level_attitude_error(q) -> float:
+    norm_sq = q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z
+    if norm_sq < 1e-12 or not math.isfinite(norm_sq):
+        return math.pi / 2.0
+    body_z_world_z = 1.0 - 2.0 * (q.x*q.x + q.y*q.y) / norm_sq
+    return math.acos(min(1.0, abs(body_z_world_z)))
 
 
 def _yaw_from_quaternion(q) -> float:
@@ -159,7 +163,7 @@ def _publish_pre_align_position_command(
         if odom_now is not None:
             cur_pose = odom_now.pose.pose
             z_ok = abs(cur_pose.position.z - target_altitude) <= z_tolerance
-            att_ok = _attitude_error_to_identity(cur_pose.orientation) <= att_tolerance
+            att_ok = _level_attitude_error(cur_pose.orientation) <= att_tolerance
             if z_ok and att_ok:
                 if reached_since is None:
                     reached_since = now

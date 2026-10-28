@@ -91,14 +91,8 @@ def _wait_for_fsm_hover(cache, altitude, z_tolerance, hold_sec):
     return False
 
 
-def _attitude_error_to_identity(q) -> float:
-    # Deprecated: this metric penalizes yaw as well and can block pre-align if
-    # the vehicle starts with non-zero yaw.
-    return math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + (q.w - 1.0) * (q.w - 1.0))
-
-
 def _tilt_angle_from_quaternion(q) -> float:
-    """Return tilt angle (rad) between body z-axis and world z-axis.
+    """Return angle to the nearest level upright or inverted attitude.
 
     This is yaw-invariant and therefore suitable for judging whether the
     vehicle is level (roll/pitch small) regardless of heading.
@@ -107,10 +101,12 @@ def _tilt_angle_from_quaternion(q) -> float:
     (standard ROS Pose orientation semantics).
     """
     # Third column of rotation matrix (body z-axis expressed in world frame).
-    # cos(tilt) = z_world · (R * e_z_body) = r33 = 1 - 2(x^2 + y^2)
-    r33 = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+    norm_sq = q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z
+    if norm_sq < 1e-12 or not math.isfinite(norm_sq):
+        return math.pi / 2.0
+    r33 = 1.0 - 2.0 * (q.x * q.x + q.y * q.y) / norm_sq
     r33 = max(-1.0, min(1.0, r33))
-    return math.acos(r33)
+    return math.acos(abs(r33))
 
 
 def _yaw_from_quaternion(q) -> float:
@@ -298,7 +294,7 @@ def _run_pre_align(cache: _StateCache,
         if odom_now is not None:
             cur_pose = odom_now.pose.pose
             z_ok = abs(cur_pose.position.z - target_altitude) <= z_tolerance
-            att_ok = _attitude_error_to_identity(cur_pose.orientation) <= att_tolerance
+            att_ok = _tilt_angle_from_quaternion(cur_pose.orientation) <= att_tolerance
             if z_ok and att_ok:
                 if reached_since is None:
                     reached_since = now

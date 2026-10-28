@@ -16,14 +16,14 @@ nmpc_hover_thrust: 0.48
 nmpc_gravity: 9.8015
 nmpc_hover_x: 0.0
 nmpc_hover_y: 0.0
-nmpc_hover_z: 0.5
+nmpc_hover_z: 1.8
 nmpc_hover_yaw: 0.0
 # 3Droll 分支全部角速度/推力指令统一走可逆 MAVROS 姿态插件。
 # MAVROS 必须在启动前配置 setpoint_attitude/reverse_thrust=true。
 enable_cmd8: true
 roll_duration_sec: 1.2
 roll_rate_limit: 6.0
-roll_min_height: 1.5
+roll_min_height: 0.8
 roll_max_entry_speed: 0.25
 roll_state_timeout_sec: 0.3
 inverted_land_speed: 0.20

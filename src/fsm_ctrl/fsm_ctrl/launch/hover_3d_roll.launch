@@ -7,7 +7,7 @@
   <arg name="hover_thrust" default="0.48" />
   <arg name="roll_duration_sec" default="1.2" />
   <arg name="roll_rate_limit" default="6.0" />
-  <arg name="roll_min_height" default="1.5" />
+  <arg name="roll_min_height" default="0.8" />
   <arg name="inverted_land_speed" default="0.20" />
 
   <include file="$(find fsm_ctrl)/launch/mavros_3d.launch">

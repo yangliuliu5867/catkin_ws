@@ -292,11 +292,11 @@ int main(int argc, char **argv)
     double rthrust = 1.0, hover_thrust = 0.196;
     double planner_command_timeout = 0.5;
     double nmpc_gravity = 9.8015;
-    double hover_x = 0.0, hover_y = 0.0, hover_z = 0.5, hover_yaw = 0.0;
-    bool enable_cmd8 = false;
+    double hover_x = 0.0, hover_y = 0.0, hover_z = 1.8, hover_yaw = 0.0;
+    bool enable_cmd8 = true;
     double roll_duration_sec = 1.2;
     double roll_rate_limit = 6.0;
-    double roll_min_height = 1.5;
+    double roll_min_height = 0.8;
     double roll_max_entry_speed = 0.25;
     double roll_state_timeout_sec = 0.3;
     double inverted_land_speed = 0.20;
@@ -372,9 +372,11 @@ int main(int argc, char **argv)
              ndob_bandwidth_x, ndob_bandwidth_y, ndob_bandwidth_z,
              ndob_limit_x, ndob_limit_y, ndob_limit_z);
 
+    bool inverted_mode = false;
     ros::Time ndob_last_velocity_stamp;
     const auto reset_ndob = [&]() {
-        nmpc.resetDisturbanceObserver(local_velocity);
+        nmpc.resetDisturbanceObserver(
+            local_velocity, inverted_mode ? -nmpc_gravity : nmpc_gravity);
         ndob_last_velocity_stamp = local_velocity_stamp;
     };
     const auto update_ndob = [&]() {
@@ -384,7 +386,8 @@ int main(int argc, char **argv)
         }
         if (ndob_last_velocity_stamp.isZero())
         {
-            nmpc.resetDisturbanceObserver(local_velocity);
+            nmpc.resetDisturbanceObserver(
+                local_velocity, inverted_mode ? -nmpc_gravity : nmpc_gravity);
             ndob_last_velocity_stamp = local_velocity_stamp;
             return;
         }
@@ -593,8 +596,12 @@ int main(int argc, char **argv)
     // 与 Jiangyin/nmpc 一致的有界低频 XY 位置修正。修正量单位为米，
     // 对整个 NMPC 参考窗口统一平移，不改变轨迹形状、速度和碰撞时序。
     Eigen::Vector2d xy_integral_correction = Eigen::Vector2d::Zero();
-    bool inverted_mode = false;
-    double inverted_figure_height = 0.5;
+    bool initial_orientation_known = false;
+    bool roll_active = false;
+    bool roll_started_inverted = false;
+    double ground_reference_z = 0.0;
+    bool ground_reference_valid = false;
+    double inverted_figure_height = hover_z;
     Eigen::Vector3d inverted_land_entry = Eigen::Vector3d::Zero();
     double inverted_land_yaw = 0.0;
     ros::Time inverted_land_start;
@@ -749,7 +756,8 @@ int main(int argc, char **argv)
              roll_duration_sec, roll_profile.back().lateral,
              roll_min_height_offset, roll_peak_rise);
     const auto make_roll_reference = [&](const Eigen::Vector3d &position,
-                                         double yaw, double elapsed) {
+                                         double yaw, double elapsed,
+                                         bool started_inverted) {
         std::vector<double> desired;
         const Eigen::Quaterniond yaw_rotation(
             Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()));
@@ -774,13 +782,17 @@ int main(int argc, char **argv)
             const double time = elapsed + i * nmpc.getNLPOnestepTime();
             const double s = std::max(0.0, std::min(1.0, time / roll_duration_sec));
             const RollPoint point = sample(time);
+            const double lateral_sign = started_inverted ? -1.0 : 1.0;
             const Eigen::Vector3d target = position +
-                lateral_axis * point.lateral +
+                lateral_axis * (lateral_sign * point.lateral) +
                 Eigen::Vector3d(0.0, 0.0, point.height);
-            const Eigen::Vector3d velocity = lateral_axis * point.lateral_speed +
+            const Eigen::Vector3d velocity =
+                lateral_axis * (lateral_sign * point.lateral_speed) +
                 Eigen::Vector3d(0.0, 0.0, point.vertical_speed);
             const Eigen::Quaterniond q = yaw_rotation * Eigen::Quaterniond(
-                Eigen::AngleAxisd(roll_angle(s), Eigen::Vector3d::UnitX()));
+                Eigen::AngleAxisd(started_inverted
+                    ? 3.14159265358979323846 - roll_angle(s) : roll_angle(s),
+                    Eigen::Vector3d::UnitX()));
             desired.insert(desired.end(), {
                 target.x(), target.y(), target.z(),
                 velocity.x(), velocity.y(), velocity.z(),
@@ -790,7 +802,9 @@ int main(int argc, char **argv)
             const double time = elapsed + i * nmpc.getNLPOnestepTime();
             const double s = std::max(0.0, std::min(1.0, time / roll_duration_sec));
             desired.insert(desired.end(), {
-                roll_rate(s), 0.0, 0.0, roll_thrust(s, roll_gain)});
+                started_inverted ? -roll_rate(s) : roll_rate(s), 0.0, 0.0,
+                started_inverted ? -roll_thrust(s, roll_gain)
+                                 : roll_thrust(s, roll_gain)});
         }
         return desired;
     };
@@ -805,9 +819,10 @@ int main(int argc, char **argv)
         for (int i = 0; i <= nmpc.getNLPPredictStep(); ++i)
         {
             const double time = elapsed + i * nmpc.getNLPOnestepTime();
-            const double z = std::max(-0.05,
+            const double floor_z = ground_reference_z - 0.05;
+            const double z = std::max(floor_z,
                 inverted_land_entry.z() - inverted_land_speed * time);
-            const double vz = z > -0.05 ? -inverted_land_speed : 0.0;
+            const double vz = z > floor_z ? -inverted_land_speed : 0.0;
             desired.insert(desired.end(), {
                 inverted_land_entry.x(), inverted_land_entry.y(), z,
                 0.0, 0.0, vz,
@@ -950,7 +965,7 @@ int main(int argc, char **argv)
             desired.insert(desired.end(), {
                 0.75 * std::sin(phase) + xy_integral_correction.x(),
                 0.375 * std::sin(2.0 * phase) + xy_integral_correction.y(),
-                inverted_mode ? inverted_figure_height : 0.5,
+                inverted_figure_height,
                 0.75 * std::cos(phase), 0.75 * std::cos(2.0 * phase), 0.0,
                 figure_eight_attitude.w(), figure_eight_attitude.x(),
                 figure_eight_attitude.y(), figure_eight_attitude.z()});
@@ -969,7 +984,9 @@ int main(int argc, char **argv)
     ros::Rate rate(kControlRateHz);
     for (int i = 0; ros::ok() && i < 100; ++i)
     {
-        position_publisher.publish(position_setpoint);
+        // Prime OFFBOARD with the same signed attitude transport used in flight.
+        // A position setpoint here could select an upright-only PX4 controller.
+        publish_signed_command(Eigen::Vector3d::Zero(), 0.0);
         ros::spinOnce();
         rate.sleep();
     }
@@ -985,11 +1002,47 @@ int main(int argc, char **argv)
     while (ros::ok())
     {
         ros::spinOnce();
+        if (!initial_orientation_known || (!current_state.armed && !roll_active))
+        {
+            const ros::Time now = ros::Time::now();
+            const double body_z_world_z =
+                (local_attitude * Eigen::Vector3d::UnitZ()).z();
+            if (has_local_pose &&
+                std::abs((now - local_pose_stamp).toSec()) < roll_state_timeout_sec &&
+                local_position.allFinite() &&
+                std::isfinite(body_z_world_z) &&
+                std::abs(body_z_world_z) > 0.95)
+            {
+                const bool detected_inverted = body_z_world_z < 0.0;
+                if (!initial_orientation_known || inverted_mode != detected_inverted)
+                {
+                    ROS_WARN("3D ground orientation detected: %s; cmd 3 uses %s thrust",
+                             detected_inverted ? "inverted" : "upright",
+                             detected_inverted ? "reverse" : "forward");
+                    inverted_mode = detected_inverted;
+                    nmpc.resetWarmStart(
+                        inverted_mode ? -nmpc_gravity : nmpc_gravity);
+                    reset_ndob();
+                }
+                initial_orientation_known = true;
+                ground_reference_z = local_position.z();
+                ground_reference_valid = true;
+            }
+            else if (!initial_orientation_known ||
+                     command.load(std::memory_order_relaxed) != 0)
+            {
+                ROS_ERROR_THROTTLE(1.0,
+                    "Waiting for fresh, nearly level upright/inverted pose before accepting flight commands");
+                publish_signed_command(Eigen::Vector3d::Zero(), 0.0);
+                rate.sleep();
+                continue;
+            }
+        }
         int active_command = command.load(std::memory_order_relaxed);
-        if (previous_command == 8 && active_command != 8 && !inverted_mode)
+        if (roll_active && active_command != 8)
         {
             ROS_WARN_THROTTLE(1.0,
-                "cmd 8 is still rolling; waiting for stable inverted attitude");
+                "cmd 8 is still rolling; waiting for stable target attitude");
             command.store(8, std::memory_order_relaxed);
             active_command = 8;
         }
@@ -1010,26 +1063,40 @@ int main(int argc, char **argv)
                 roll_min_height > 0.0 &&
                 final_vertical_speed(roll_gain_high) >= -0.01 &&
                 state_fresh && local_position.allFinite() &&
-                local_velocity.allFinite() && body_z.z() > 0.95 &&
+                local_velocity.allFinite() &&
+                (inverted_mode ? body_z.z() < -0.95 : body_z.z() > 0.95) &&
                 local_position.z() + roll_min_height_offset >= roll_min_height &&
                 local_velocity.norm() <= roll_max_entry_speed;
             if (!ready)
             {
-                ROS_ERROR("cmd 8 rejected: check stable upright cmd 3 hover, reverse-thrust MAVROS, roll time/rate, and height");
+                ROS_ERROR("cmd 8 rejected: check stable cmd 3 hover, reverse-thrust MAVROS, roll time/rate, and height");
                 command.store(previous_command, std::memory_order_relaxed);
                 active_command = previous_command;
             }
             else
             {
                 roll_hold_position = local_position;
+                roll_started_inverted = inverted_mode;
+                const Eigen::Quaterniond upright_equivalent = inverted_mode
+                    ? Eigen::Quaterniond(local_attitude * Eigen::Quaterniond(
+                        Eigen::AngleAxisd(3.14159265358979323846,
+                                          Eigen::Vector3d::UnitX())))
+                    : local_attitude;
                 roll_hold_yaw = std::atan2(
-                    2.0 * (local_attitude.w() * local_attitude.z() +
-                           local_attitude.x() * local_attitude.y()),
-                    1.0 - 2.0 * (local_attitude.y() * local_attitude.y() +
-                                 local_attitude.z() * local_attitude.z()));
+                    2.0 * (upright_equivalent.w() * upright_equivalent.z() +
+                           upright_equivalent.x() * upright_equivalent.y()),
+                    1.0 - 2.0 * (upright_equivalent.y() * upright_equivalent.y() +
+                                 upright_equivalent.z() * upright_equivalent.z()));
                 roll_start_time = now;
-                roll_nmpc->resetDisturbanceObserver(local_velocity);
-                ROS_WARN("cmd 8 accepted: 180-degree roll from hover, then inverted NMPC hold");
+                roll_active = true;
+                roll_nmpc->resetWarmStart(
+                    roll_started_inverted ? -nmpc_gravity : nmpc_gravity);
+                roll_nmpc->resetDisturbanceObserver(
+                    local_velocity,
+                    roll_started_inverted ? -nmpc_gravity : nmpc_gravity);
+                ROS_WARN("cmd 8 accepted: 180-degree roll %s -> %s, then cmd 3 hover",
+                         roll_started_inverted ? "inverted" : "upright",
+                         roll_started_inverted ? "upright" : "inverted");
             }
         }
         if (active_command == 4 && previous_command != 4 && inverted_mode)
@@ -1068,6 +1135,10 @@ int main(int argc, char **argv)
                 reset_ndob();
             }
             trajectory_step = 0;
+            if (active_command == 7 && has_local_pose)
+            {
+                inverted_figure_height = local_position.z();
+            }
             reset_xy_integral();
             const bool is_trajectory_command =
                 active_command == 5 ||
@@ -1123,8 +1194,10 @@ int main(int argc, char **argv)
         case 1:
             if (inverted_mode)
             {
-                ROS_WARN_THROTTLE(2.0, "cmd 1 during inverted flight holds position");
-                nmpc_hover();
+                RequestOffboardAndArm(
+                    set_mode_client, arming_client, offboard_mode,
+                    arm_command, last_request);
+                publish_signed_command(Eigen::Vector3d::Zero(), -0.02);
                 break;
             }
             RequestOffboardAndArm(
@@ -1183,7 +1256,8 @@ int main(int argc, char **argv)
                     (landing_now - local_velocity_stamp).toSec() < roll_state_timeout_sec &&
                     current_extended_state.landed_state ==
                         mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND &&
-                    local_position.z() < 0.10 &&
+                    ground_reference_valid &&
+                    std::abs(local_position.z() - ground_reference_z) < 0.25 &&
                     std::abs(local_velocity.z()) < 0.15;
                 if (on_ground)
                 {
@@ -1272,8 +1346,7 @@ int main(int argc, char **argv)
                     0.75 * std::sin(phase) + xy_integral_correction.x();
                 reference_pose.pose.position.y =
                     0.375 * std::sin(2.0 * phase) + xy_integral_correction.y();
-                reference_pose.pose.position.z =
-                    inverted_mode ? inverted_figure_height : 0.5;
+                reference_pose.pose.position.z = inverted_figure_height;
                 reference_pose.pose.orientation.w = inverted_mode ? 0.0 : 1.0;
                 reference_pose.pose.orientation.x = inverted_mode ? 1.0 : 0.0;
                 reference_velocity.twist.linear.x = 0.75 * std::cos(phase);
@@ -1287,18 +1360,25 @@ int main(int argc, char **argv)
         case 8:
             run_nmpc(make_roll_reference(
                 roll_hold_position, roll_hold_yaw,
-                (ros::Time::now() - roll_start_time).toSec()), true);
-            if (!inverted_mode &&
+                (ros::Time::now() - roll_start_time).toSec(),
+                roll_started_inverted), true);
+            if (roll_active &&
                 (ros::Time::now() - roll_start_time).toSec() >= roll_duration_sec &&
-                (local_attitude * Eigen::Vector3d::UnitZ()).z() < -0.95 &&
+                (roll_started_inverted
+                    ? (local_attitude * Eigen::Vector3d::UnitZ()).z() > 0.95
+                    : (local_attitude * Eigen::Vector3d::UnitZ()).z() < -0.95) &&
                 std::abs(latest_imu.angular_velocity.x) < 0.5 &&
                 local_velocity.norm() < 0.5)
             {
-                inverted_mode = true;
+                inverted_mode = !roll_started_inverted;
+                roll_active = false;
                 inverted_figure_height = roll_hold_position.z();
                 reset_ndob();
+                nmpc.resetWarmStart(
+                    inverted_mode ? -nmpc_gravity : nmpc_gravity);
                 command.store(3, std::memory_order_relaxed);
-                ROS_WARN("cmd 8 complete; switching to cmd 3 inverted hover");
+                ROS_WARN("cmd 8 complete; switching to cmd 3 %s hover",
+                         inverted_mode ? "inverted" : "upright");
             }
             break;
 

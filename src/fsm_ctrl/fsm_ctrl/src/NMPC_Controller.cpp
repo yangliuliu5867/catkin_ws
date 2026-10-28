@@ -179,10 +179,21 @@ void NMPC_Ctrller_simple::configureDisturbanceObserver(
     disturbance_observer.configure(enabled, bandwidth, estimate_limit, gravity);
 }
 
-void NMPC_Ctrller_simple::resetDisturbanceObserver(const Eigen::Vector3d &velocity)
+void NMPC_Ctrller_simple::resetDisturbanceObserver(
+    const Eigen::Vector3d &velocity, double signed_hover_acceleration)
 {
     disturbance_observer.reset(velocity);
-    collective_acceleration_command = world_gravity_acc;
+    collective_acceleration_command = signed_hover_acceleration;
+}
+
+void NMPC_Ctrller_simple::resetWarmStart(double signed_hover_acceleration)
+{
+    NLP_initial_u0.assign(4 * NLP_predict_step, 0.0);
+    for (int i = 0; i < NLP_predict_step; ++i)
+    {
+        NLP_initial_u0[3 * NLP_predict_step + i] = signed_hover_acceleration;
+    }
+    collective_acceleration_command = signed_hover_acceleration;
 }
 
 void NMPC_Ctrller_simple::updateDisturbanceObserver(

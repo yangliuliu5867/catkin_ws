@@ -104,7 +104,9 @@ class NMPC_Ctrller_simple
                                           const Eigen::Vector3d &bandwidth,
                                           const Eigen::Vector3d &estimate_limit,
                                           double gravity);
-        void resetDisturbanceObserver(const Eigen::Vector3d &velocity);
+        void resetDisturbanceObserver(const Eigen::Vector3d &velocity,
+                                     double signed_hover_acceleration = G);
+        void resetWarmStart(double signed_hover_acceleration);
         void updateDisturbanceObserver(const Eigen::Vector3d &velocity,
                                        const Eigen::Quaterniond &attitude,
                                        double dt);
