@@ -2,7 +2,7 @@
 
 本分支默认使用 MAVROS 可逆姿态插件发送机体系角速度和带符号推力。启动时读取新鲜的姿态反馈，自动识别飞机是正放还是倒放；姿态接近侧立时不接受飞行指令。倒放地面起飞可直接输入 `cmd3`，它会按倒飞姿态和负推力飞向同一个世界坐标悬停点。`cmd8` 只负责在正飞和倒飞之间切换 180°，每次完成后自动回到 `cmd3`。其余指令保持原有目标：倒飞状态下的 `cmd5/6` 仍按原世界坐标轨迹飞行，`cmd4` 倒飞下降并等待飞控确认着陆。
 
-未解锁时会持续按实测姿态更新正飞／倒飞判断；解锁后只允许通过 `cmd8` 切换。`cmd7` 从输入该指令时的实测高度开始画八字，不再跳到固定的 0.5 m。默认 `cmd3` 悬停高度与完整流程的预对齐高度均为 1.8 m。
+未解锁时会持续按实测姿态更新正飞／倒飞判断；解锁后只允许通过 `cmd8` 切换。`cmd7` 从输入该指令时的实测高度开始画八字，不再跳到固定的 0.5 m。默认 `cmd3` 悬停高度与完整流程的预对齐高度均为 1.4 m。
 
 ## 单独测试翻滚与悬停
 
@@ -18,7 +18,7 @@ bash start_lio.sh
 ```bash
 cd ~/catkin_ws
 source devel/setup.bash
-roslaunch fsm_ctrl hover_3d_roll.launch hover_z:=1.8 hover_thrust:=0.48
+roslaunch fsm_ctrl hover_3d_roll.launch hover_z:=1.4 hover_thrust:=0.48
 ```
 
 另开终端启动交互界面：
@@ -44,7 +44,7 @@ roslaunch fsm_ctrl mavros_3d.launch
 随后启动原完整流程与交互界面：
 
 ```bash
-roslaunch real_flight_bringup real_flight_step1.launch pre_align_altitude:=1.8
+roslaunch real_flight_bringup real_flight_step1.launch pre_align_altitude:=1.4
 roslaunch fsm_ctrl swarm.launch
 ```
 
@@ -55,7 +55,7 @@ roslaunch fsm_ctrl swarm.launch
 ## 参数与验证
 
 - `hover_3d_roll.launch`：`hover_z`、`hover_thrust`、`roll_duration_sec`、`roll_rate_limit`、`roll_min_height`、`inverted_land_speed`。翻转时间默认 1.2 s，NMPC 翻滚角速度上限默认 6.0 rad/s，最低入场高度默认 0.8 m，倒飞下降速度默认 0.20 m/s。
-- `roll_min_height=0.8` 只是允许执行 `cmd8` 的最低实测入场高度；默认 `cmd3` 悬停目标仍是 1.8 m。理想轨迹的最低高度不低于入场高度，实机反向切换延迟和控制误差可能造成下降。
+- `roll_min_height=0.8` 只是允许执行 `cmd8` 的最低实测入场高度；默认 `cmd3` 悬停目标仍是 1.4 m。理想轨迹的最低高度不低于入场高度，实机反向切换延迟和控制误差可能造成下降。
 - 完整流程的 NMPC 参数在 `real_flight_bringup/config/nmpc.yaml`，高度还会由 `real_flight_step1.launch` 的 `pre_align_altitude` 覆盖。
 - `cmd8` 只允许从 `cmd3` 进入，要求飞控处于 OFFBOARD 且已解锁、定位新鲜、姿态接近当前正飞或倒飞状态、速度较低。翻转未完成时不会切换到其他指令。
 - `/debugPx4ctrl`、`/nmpc_state` 可查看参考姿态、速度和带符号推力。

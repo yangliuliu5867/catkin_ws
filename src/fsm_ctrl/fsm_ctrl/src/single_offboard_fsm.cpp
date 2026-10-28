@@ -292,7 +292,7 @@ int main(int argc, char **argv)
     double rthrust = 1.0, hover_thrust = 0.196;
     double planner_command_timeout = 0.5;
     double nmpc_gravity = 9.8015;
-    double hover_x = 0.0, hover_y = 0.0, hover_z = 1.8, hover_yaw = 0.0;
+    double hover_x = 0.0, hover_y = 0.0, hover_z = 1.4, hover_yaw = 0.0;
     bool enable_cmd8 = true;
     double roll_duration_sec = 1.2;
     double roll_rate_limit = 6.0;
