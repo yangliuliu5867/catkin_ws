@@ -10,21 +10,21 @@ waypoints:
 - id: 0
   flight_mode: avoidance
   trajectory_mode: 1
-  x: -0.243094
-  y: 1.5965
-  z: -0.014684
-  yaw: 1.378281
+  x: 2.28518
+  y: 0.124671
+  z: 1.305924
+  yaw: 0.20803399999999997
 - id: 1
   flight_mode: avoidance
   trajectory_mode: 1
-  x: -0.212464
-  y: 1.556147
-  z: -0.019181
-  yaw: 1.380226
+  x: 1.759147
+  y: 0.010418
+  z: 1.03539
+  yaw: 0.052662
 - id: 2
   flight_mode: avoidance
   trajectory_mode: 1
-  x: -0.189157
-  y: 1.521898
-  z: -0.01964
-  yaw: 1.380787
+  x: 3.177486
+  y: 0.045138
+  z: 1.01976
+  yaw: -0.26795

@@ -12,19 +12,20 @@ Mission:
     cmd5:
       - id: 0
         flight_mode: avoidance
+        grasp_target: true
         trajectory_mode: 1
-        x: 1.0
+        x: 2
         y: 0.0
-        z: 1.4
-        yaw: 0.0
+        z: 0.98
+        yaw: 0.01
     cmd6:
       - id: 0
         flight_mode: avoidance
         trajectory_mode: 1
-        x: 2.0
-        y: 1.0
-        z: 0.8
-        yaw: 0.0
+        x: 3.159147
+        y: 0.010418
+        z: 1.43539
+        yaw: 0.052662
 
 
 SetPos: [0.0, 3.5, 1.40]
