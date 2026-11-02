@@ -5,7 +5,7 @@
     <arg name="fcu_url" default="/dev/ttyACM0:921600"/>
     <arg name="enable_cmd8" default="true"/>
     <arg name="hover_z" default="1.4"/>
-    <arg name="hover_thrust" default="0.48"/>
+    <arg name="hover_thrust" default="0.74"/>
     <arg name="roll_duration_sec" default="1.2"/>
     <arg name="roll_rate_limit" default="6.0"/>
     <arg name="roll_min_height" default="0.8"/>

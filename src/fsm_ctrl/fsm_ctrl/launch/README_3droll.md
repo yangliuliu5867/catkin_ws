@@ -18,7 +18,7 @@ bash start_lio.sh
 ```bash
 cd ~/catkin_ws
 source devel/setup.bash
-roslaunch fsm_ctrl hover_3d_roll.launch hover_z:=1.4 hover_thrust:=0.48
+roslaunch fsm_ctrl hover_3d_roll.launch hover_z:=1.4 hover_thrust:=0.74
 ```
 
 另开终端启动交互界面：

@@ -4,7 +4,7 @@
   <arg name="lidar_odom_topic" default="/aft_mapped_to_init" />
   <arg name="lidar_to_body_pitch_deg" default="-25.3" />
   <arg name="hover_z" default="1.4" />
-  <arg name="hover_thrust" default="0.48" />
+  <arg name="hover_thrust" default="0.74" />
   <arg name="roll_duration_sec" default="1.2" />
   <arg name="roll_rate_limit" default="6.0" />
   <arg name="roll_min_height" default="0.8" />

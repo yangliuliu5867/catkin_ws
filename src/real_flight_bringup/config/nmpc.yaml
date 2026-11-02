@@ -12,7 +12,7 @@ nmpc_Rwx: 0.9
 nmpc_Rwy: 0.9
 nmpc_Rwz: 0.5
 nmpc_RtotalF: 0.1
-nmpc_hover_thrust: 0.48
+nmpc_hover_thrust: 0.74
 nmpc_gravity: 9.8015
 nmpc_hover_x: 0.0
 nmpc_hover_y: 0.0
