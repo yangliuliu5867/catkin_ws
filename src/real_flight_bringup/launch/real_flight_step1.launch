@@ -147,11 +147,12 @@
         <param name="fsm_command_topic" value="/fsm_ctrl/command" />
     </node>
 
-    <!-- Primary low-level controller: Jiangyin FSM + NMPC. cmd5/cmd6 track /position_command. -->
+    <!-- Primary low-level controller: cmd5/cmd6 track /position_command; cmd7 runs its own +X test. -->
     <node if="$(arg enable_nmpc)" pkg="fsm_ctrl" type="single_offboard_fsm"
           name="single_offboard_fsm" output="screen">
         <rosparam command="load" file="$(find real_flight_bringup)/config/nmpc.yaml" />
         <param name="nmpc_hover_z" value="$(arg pre_align_altitude)" />
+        <param name="cmd7_external_force_topic" value="$(arg ext_force_topic)" />
     </node>
 
 </launch>

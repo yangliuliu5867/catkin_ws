@@ -31,6 +31,9 @@ bool has_local_pose = false;
 bool has_local_velocity = false;
 bool has_planner_command = false;
 bool has_planner_horizon = false;
+Eigen::Vector3d external_force = Eigen::Vector3d::Zero();
+ros::Time external_force_stamp;
+bool has_external_force = false;
 geometry_msgs::PoseStamped position_setpoint;
 mavros_msgs::AttitudeTarget attitude_setpoint;
 
@@ -91,6 +94,19 @@ void PlannerHorizonCallback(const quadrotor_msgs::PositionCommandArray::ConstPtr
     planner_horizon = *message;
     planner_horizon_stamp = ros::Time::now();
     has_planner_horizon = true;
+}
+
+void ExternalForceCallback(const geometry_msgs::Vector3Stamped::ConstPtr &message)
+{
+    const Eigen::Vector3d force(
+        message->vector.x, message->vector.y, message->vector.z);
+    if (!force.allFinite())
+    {
+        return;
+    }
+    external_force = force;
+    external_force_stamp = ros::Time::now();
+    has_external_force = true;
 }
 
 void RcCallback(const mavros_msgs::RCIn::ConstPtr &message)
@@ -198,9 +214,12 @@ int main(int argc, char **argv)
 
     std::string planner_command_topic = "/position_command";
     std::string planner_horizon_topic = "/position_command_horizon";
+    std::string cmd7_external_force_topic = "/real/external_force_est";
     std::string mission_mode = "single";
     private_node.param("planner_command_topic", planner_command_topic, planner_command_topic);
     private_node.param("planner_horizon_topic", planner_horizon_topic, planner_horizon_topic);
+    private_node.param("cmd7_external_force_topic", cmd7_external_force_topic,
+                       cmd7_external_force_topic);
     node.param("/Mission/mode", mission_mode, mission_mode);
 
     const ros::Publisher position_publisher =
@@ -241,6 +260,10 @@ int main(int argc, char **argv)
         node.subscribe<quadrotor_msgs::PositionCommandArray>(
             planner_horizon_topic, 5, PlannerHorizonCallback,
             ros::TransportHints().tcpNoDelay());
+    const ros::Subscriber external_force_subscriber =
+        node.subscribe<geometry_msgs::Vector3Stamped>(
+            cmd7_external_force_topic, 10, ExternalForceCallback,
+            ros::TransportHints().tcpNoDelay());
     const ros::Subscriber rc_subscriber =
         node.subscribe<mavros_msgs::RCIn>(
             "/mavros/rc/in", 10, RcCallback);
@@ -271,6 +294,8 @@ int main(int argc, char **argv)
     double qqx = 1.0, qqy = 1.0, qqz = 1.0, rwx = 1.0, rwy = 1.0, rwz = 1.0;
     double rthrust = 1.0, hover_thrust = 0.196;
     double planner_command_timeout = 0.5;
+    double cmd7_force_threshold = 4.0;
+    double cmd7_force_timeout_sec = 0.5;
     double nmpc_gravity = 9.8015;
     double hover_x = 0.0, hover_y = 0.0, hover_z = 0.5, hover_yaw = 0.0;
     bool enable_xy_integral = true;
@@ -287,6 +312,15 @@ int main(int argc, char **argv)
     private_node.param("nmpc_Rwx", rwx, rwx); private_node.param("nmpc_Rwy", rwy, rwy); private_node.param("nmpc_Rwz", rwz, rwz);
     private_node.param("nmpc_RtotalF", rthrust, rthrust); private_node.param("nmpc_hover_thrust", hover_thrust, hover_thrust);
     private_node.param("planner_command_timeout", planner_command_timeout, planner_command_timeout);
+    private_node.param("cmd7_force_threshold", cmd7_force_threshold, cmd7_force_threshold);
+    private_node.param("cmd7_force_timeout_sec", cmd7_force_timeout_sec,
+                       cmd7_force_timeout_sec);
+    if (!std::isfinite(cmd7_force_threshold) || cmd7_force_threshold <= 0.0 ||
+        !std::isfinite(cmd7_force_timeout_sec) || cmd7_force_timeout_sec <= 0.0)
+    {
+        ROS_FATAL("cmd7 force threshold and timeout must be finite and positive");
+        return 1;
+    }
     private_node.param("nmpc_gravity", nmpc_gravity, nmpc_gravity);
     private_node.param("nmpc_hover_x", hover_x, hover_x);
     private_node.param("nmpc_hover_y", hover_y, hover_y);
@@ -678,25 +712,90 @@ int main(int argc, char **argv)
         }
         run_nmpc(desired);
     };
-    const auto nmpc_figure_eight = [&](int step) {
-        const double current_phase = step * 0.02;
-        update_xy_integral(Eigen::Vector2d(
-            0.75 * std::sin(current_phase),
-            0.375 * std::sin(2.0 * current_phase)));
+    enum class Cmd7Phase { WAITING, OUTBOUND, RETURNING, COMPLETE };
+    Cmd7Phase cmd7_phase = Cmd7Phase::WAITING;
+    bool cmd7_returned = false;
+    Eigen::Vector3d cmd7_origin = Eigen::Vector3d::Zero();
+    Eigen::Vector3d cmd7_return_origin = Eigen::Vector3d::Zero();
+    double cmd7_yaw = 0.0;
+    double cmd7_return_duration = 2.0;
+    ros::Time cmd7_phase_start;
+    const auto cmd7_force_is_fresh = [&]() {
+        return has_external_force &&
+            (ros::Time::now() - external_force_stamp).toSec() <= cmd7_force_timeout_sec;
+    };
+    const auto cmd7_make_reference = [&](const Eigen::Vector3d &start,
+                                          const Eigen::Vector3d &displacement,
+                                          double elapsed, double duration,
+                                          bool outbound) {
         std::vector<double> desired;
-        for (int i = 0; i < 9; ++i)
+        std::vector<double> feedforward_thrust;
+        const double dt = nmpc.getNLPOnestepTime();
+        for (int i = 0; i <= nmpc.getNLPPredictStep(); ++i)
         {
-            const double phase = step * 0.02 + i * nmpc.getNLPOnestepTime();
+            const double t = std::max(0.0, std::min(duration, elapsed + i * dt));
+            double s = 0.0, v = 0.0, a = 0.0;
+            if (outbound)
+            {
+                // 1 m/s peak, 1 m/s^2 acceleration: 0.5 + 1.0 + 0.5 = 2 m.
+                if (t < 1.0) { s = 0.5 * t * t; v = t; a = 1.0; }
+                else if (t < 2.0) { s = t - 0.5; v = 1.0; }
+                else if (t < 3.0) {
+                    const double u = t - 2.0;
+                    s = 1.5 + u - 0.5 * u * u; v = 1.0 - u; a = -1.0;
+                }
+                else { s = 2.0; }
+            }
+            else
+            {
+                const double u = t / duration;
+                s = 10.0 * u * u * u - 15.0 * u * u * u * u +
+                    6.0 * u * u * u * u * u;
+                v = (30.0 * u * u - 60.0 * u * u * u +
+                     30.0 * u * u * u * u) / duration;
+                a = (60.0 * u - 180.0 * u * u +
+                     120.0 * u * u * u) / (duration * duration);
+            }
+            const Eigen::Vector3d position = start + s * displacement;
+            const Eigen::Vector3d velocity = v * displacement;
+            Eigen::Vector3d thrust_acceleration =
+                a * displacement + Eigen::Vector3d(0.0, 0.0, nmpc_gravity);
+            Eigen::Quaterniond desired_attitude(DiffFlat(thrust_acceleration, cmd7_yaw));
+            desired_attitude.normalize();
             desired.insert(desired.end(), {
-                0.75 * std::sin(phase) + xy_integral_correction.x(),
-                0.375 * std::sin(2.0 * phase) + xy_integral_correction.y(), 0.5,
-                0.75 * std::cos(phase), 0.75 * std::cos(2.0 * phase), 0.0,
-                1.0, 0.0, 0.0, 0.0});
+                position.x(), position.y(), position.z(),
+                velocity.x(), velocity.y(), velocity.z(),
+                desired_attitude.w(), desired_attitude.x(),
+                desired_attitude.y(), desired_attitude.z()});
+            if (i < nmpc.getNLPPredictStep())
+            {
+                feedforward_thrust.push_back(thrust_acceleration.norm());
+            }
         }
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < nmpc.getNLPPredictStep(); ++i)
         {
-            desired.insert(desired.end(), {0.0, 0.0, 0.0, nmpc_gravity});
+            desired.insert(desired.end(), {0.0, 0.0, 0.0,
+                                           feedforward_thrust[static_cast<size_t>(i)]});
         }
+        return desired;
+    };
+    const auto run_cmd7_reference = [&](const std::vector<double> &desired) {
+        geometry_msgs::PoseStamped reference_pose;
+        geometry_msgs::TwistStamped reference_velocity;
+        reference_pose.header.stamp = reference_velocity.header.stamp = ros::Time::now();
+        reference_pose.header.frame_id = reference_velocity.header.frame_id = "map";
+        reference_pose.pose.position.x = desired[0];
+        reference_pose.pose.position.y = desired[1];
+        reference_pose.pose.position.z = desired[2];
+        reference_pose.pose.orientation.w = desired[6];
+        reference_pose.pose.orientation.x = desired[7];
+        reference_pose.pose.orientation.y = desired[8];
+        reference_pose.pose.orientation.z = desired[9];
+        reference_velocity.twist.linear.x = desired[3];
+        reference_velocity.twist.linear.y = desired[4];
+        reference_velocity.twist.linear.z = desired[5];
+        trajectory_reference_publisher.publish(reference_pose);
+        trajectory_reference_velocity_publisher.publish(reference_velocity);
         run_nmpc(desired);
     };
 
@@ -711,7 +810,6 @@ int main(int argc, char **argv)
     }
 
     ros::Time last_request = ros::Time::now();
-    int trajectory_step = 0;
     int previous_command = 0;
     Eigen::Vector3d planner_fallback_hold = local_position;
 
@@ -735,8 +833,23 @@ int main(int argc, char **argv)
             {
                 reset_ndob();
             }
-            trajectory_step = 0;
             reset_xy_integral();
+            if (active_command == 7)
+            {
+                cmd7_phase = Cmd7Phase::WAITING;
+                cmd7_returned = false;
+                cmd7_phase_start = has_local_pose && has_local_velocity
+                    ? ros::Time::now() : ros::Time();
+                if (has_local_pose && has_local_velocity)
+                {
+                    cmd7_origin = local_position;
+                    const auto &q = local_attitude;
+                    cmd7_yaw = std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()),
+                                          1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
+                    ROS_INFO("cmd7 origin=(%.2f, %.2f, %.2f), yaw=%.2f",
+                             cmd7_origin.x(), cmd7_origin.y(), cmd7_origin.z(), cmd7_yaw);
+                }
+            }
             const bool is_trajectory_command =
                 active_command == 5 ||
                 (active_command == 6 && mission_mode == "multi");
@@ -869,25 +982,98 @@ int main(int argc, char **argv)
                 offboard_mode,
                 arm_command,
                 last_request);
-            nmpc_figure_eight(trajectory_step);
+            if (!has_local_pose || !has_local_velocity)
             {
-                const double phase = 0.02 * trajectory_step;
-                geometry_msgs::PoseStamped reference_pose;
-                geometry_msgs::TwistStamped reference_velocity;
-                reference_pose.header.stamp = reference_velocity.header.stamp = ros::Time::now();
-                reference_pose.header.frame_id = reference_velocity.header.frame_id = "map";
-                reference_pose.pose.position.x =
-                    0.75 * std::sin(phase) + xy_integral_correction.x();
-                reference_pose.pose.position.y =
-                    0.375 * std::sin(2.0 * phase) + xy_integral_correction.y();
-                reference_pose.pose.position.z = 0.5;
-                reference_pose.pose.orientation.w = 1.0;
-                reference_velocity.twist.linear.x = 0.75 * std::cos(phase);
-                reference_velocity.twist.linear.y = 0.75 * std::cos(2.0 * phase);
-                trajectory_reference_publisher.publish(reference_pose);
-                trajectory_reference_velocity_publisher.publish(reference_velocity);
+                publish_safe_attitude();
+                break;
             }
-            trajectory_step = (trajectory_step + 1) % 315;
+            if (cmd7_phase == Cmd7Phase::WAITING && cmd7_phase_start.isZero())
+            {
+                cmd7_origin = local_position;
+                const auto &q = local_attitude;
+                cmd7_yaw = std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()),
+                                      1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
+                cmd7_phase_start = ros::Time::now();
+            }
+            if (cmd7_phase == Cmd7Phase::WAITING)
+            {
+                if (cmd7_force_is_fresh() &&
+                    external_force.head<2>().norm() < cmd7_force_threshold)
+                {
+                    cmd7_phase = Cmd7Phase::OUTBOUND;
+                    cmd7_phase_start = ros::Time::now();
+                    ROS_INFO("cmd7: start +X 2 m at peak 1 m/s");
+                }
+                else
+                {
+                    ROS_WARN_THROTTLE(1.0, "cmd7: waiting for fresh force estimate below %.1f N",
+                                      cmd7_force_threshold);
+                    run_cmd7_reference(make_hold_reference(cmd7_origin, cmd7_yaw));
+                    break;
+                }
+            }
+            if (cmd7_phase == Cmd7Phase::OUTBOUND ||
+                (cmd7_phase == Cmd7Phase::COMPLETE && !cmd7_returned))
+            {
+                const bool force_lost = !cmd7_force_is_fresh();
+                const double horizontal_force = external_force.head<2>().norm();
+                const bool collision = !force_lost &&
+                    horizontal_force >= cmd7_force_threshold;
+                if (force_lost || collision)
+                {
+                    cmd7_return_origin = local_position;
+                    const double distance = (cmd7_origin - cmd7_return_origin).norm();
+                    // Quintic return has a peak speed of 1.875 * distance / duration.
+                    cmd7_return_duration = std::max(2.0, 1.875 * distance);
+                    cmd7_phase = Cmd7Phase::RETURNING;
+                    cmd7_phase_start = ros::Time::now();
+                    ROS_WARN("cmd7: %s (horizontal force %.2f N); return to entry point",
+                             collision ? "collision detected" : "force estimate stale",
+                             horizontal_force);
+                }
+            }
+            if (cmd7_phase == Cmd7Phase::OUTBOUND)
+            {
+                const double elapsed = (ros::Time::now() - cmd7_phase_start).toSec();
+                if (elapsed >= 3.0)
+                {
+                    cmd7_phase = Cmd7Phase::COMPLETE;
+                    ROS_INFO("cmd7: reached +X 2 m; holding until command changes");
+                }
+                else
+                {
+                    const std::vector<double> desired = cmd7_make_reference(
+                        cmd7_origin, Eigen::Vector3d::UnitX(), elapsed, 3.0, true);
+                    run_cmd7_reference(desired);
+                    break;
+                }
+            }
+            if (cmd7_phase == Cmd7Phase::RETURNING)
+            {
+                const double elapsed = (ros::Time::now() - cmd7_phase_start).toSec();
+                if (elapsed >= cmd7_return_duration)
+                {
+                    cmd7_phase = Cmd7Phase::COMPLETE;
+                    cmd7_returned = true;
+                    ROS_INFO("cmd7: return complete; holding entry point");
+                }
+                else
+                {
+                    const std::vector<double> desired = cmd7_make_reference(
+                        cmd7_return_origin, cmd7_origin - cmd7_return_origin,
+                        elapsed, cmd7_return_duration, false);
+                    run_cmd7_reference(desired);
+                    break;
+                }
+            }
+            {
+                Eigen::Vector3d hold_position = cmd7_origin;
+                if (!cmd7_returned)
+                {
+                    hold_position.x() += 2.0;
+                }
+                run_cmd7_reference(make_hold_reference(hold_position, cmd7_yaw));
+            }
             break;
 
         default:

@@ -398,7 +398,10 @@ rostopic pub -1 /waypoint_recorder/command std_msgs/String "data: 'a'"
 - `cmd 4`：降落和上锁；
 - `cmd 5`：NMPC 跟踪第一段航点；
 - `cmd 6`：NMPC 跟踪第二段航点；
-- `cmd 7`：NMPC 八字轨迹。
+- `cmd 7`：从输入时的位置沿世界坐标 X 正方向直飞 2 米，峰值速度 1 米/秒；
+  水平外力估计达到 4 N 时，从当前实测位置返回输入时的出发点。此指令直接生成 NMPC
+  参考，不经过地图或规划器；前进结束而未碰撞时保持终点。外力话题缺失时不会开始前进，
+  前进中外力数据超过 0.5 秒未更新则返回。阈值和超时可在 `config/nmpc.yaml` 调整。
 
 调试时可同时查看：
 
@@ -408,7 +411,7 @@ rostopic pub -1 /waypoint_recorder/command std_msgs/String "data: 'a'"
 - `/position_command_horizon`：轨迹桥接器按0.05秒间隔发布的9个真实未来参考点；
 - `/visual_slam/odom`：实际定位轨迹；
 - `/position_command`：规划器当前期望状态；
-- `/single_offboard_fsm/trajectory_reference`：状态机发布的参考轨迹。
+- `/single_offboard_fsm/trajectory_reference`：cmd 7 的参考位置与姿态。
 - `/fsm_ctrl/command`：当前状态机指令，碰撞恢复节点用它检测 cmd 5；
 - `/collision_recovery/collision`、`fix_pose`、`stop`：旧恢复状态机的三个阶段；
 - `/collision_recovery/filtered_force`：恢复节点使用的滤波外力。
